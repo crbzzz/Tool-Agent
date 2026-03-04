@@ -12,6 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
+import threading
+import time
+import base64
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
@@ -25,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_TOKEN_PATH = ".secrets/google_token.json"
+
+
+_STATE_TTL_S = 10 * 60
+_state_lock = threading.Lock()
+_state_store: Dict[str, Dict[str, Any]] = {}
 
 
 GMAIL_SCOPES = [
@@ -86,6 +96,47 @@ def _build_flow() -> Flow:
         return Flow.from_client_config({"web": cfg["web"]}, scopes=scopes, redirect_uri=redirect_uri)
 
 
+def _pkce_verifier() -> str:
+    # RFC 7636: 43-128 chars; use URL-safe base64-like string.
+    return secrets.token_urlsafe(64)
+
+
+def _pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+    b64 = base64.urlsafe_b64encode(digest).decode("utf-8")
+    return b64.rstrip("=")
+
+
+def _purge_expired_states() -> None:
+    now = time.time()
+    expired = [k for k, v in _state_store.items() if now - float(v.get("ts", 0)) > _STATE_TTL_S]
+    for k in expired:
+        _state_store.pop(k, None)
+
+
+def oauth_prepare() -> Tuple[str, str]:
+    """Create an auth URL and state, storing PKCE verifier for the callback."""
+
+    flow = _build_flow()
+    state = secrets.token_urlsafe(24)
+    verifier = _pkce_verifier()
+    challenge = _pkce_challenge(verifier)
+
+    with _state_lock:
+        _purge_expired_states()
+        _state_store[state] = {"ts": time.time(), "verifier": verifier}
+
+    auth_url, _state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+        state=state,
+        code_challenge=challenge,
+        code_challenge_method="S256",
+    )
+    return auth_url, state
+
+
 def _redirect_uri() -> str:
     # Must match what you configure in Google Cloud Console.
     return os.environ.get("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/oauth/google/callback")
@@ -135,23 +186,44 @@ def delete_credentials() -> None:
 
 
 def oauth_start_url(state: str) -> str:
-    """Build the Google consent URL."""
+    """Backward-compatible wrapper: build consent URL with provided state.
+
+    Prefer `oauth_prepare()` which handles PKCE + state storage.
+    """
 
     flow = _build_flow()
+    verifier = _pkce_verifier()
+    challenge = _pkce_challenge(verifier)
+    with _state_lock:
+        _purge_expired_states()
+        _state_store[state] = {"ts": time.time(), "verifier": verifier}
     auth_url, _state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
         state=state,
+        code_challenge=challenge,
+        code_challenge_method="S256",
     )
     return auth_url
 
 
-def oauth_exchange_code(code: str) -> Credentials:
+def oauth_exchange_code(code: str, state: Optional[str] = None) -> Credentials:
     """Exchange authorization code for tokens and store them locally."""
 
+    verifier: Optional[str] = None
+    if state:
+        with _state_lock:
+            entry = _state_store.pop(state, None)
+            if entry:
+                verifier = entry.get("verifier")
+
     flow = _build_flow()
-    flow.fetch_token(code=code)
+    if verifier:
+        flow.fetch_token(code=code, code_verifier=verifier)
+    else:
+        # Best-effort fallback: some flows may not require PKCE.
+        flow.fetch_token(code=code)
     creds = flow.credentials
     save_credentials(creds)
     return creds

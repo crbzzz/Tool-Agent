@@ -38,11 +38,10 @@ def google_oauth_status() -> dict:
 
 @app.get("/oauth/google/start")
 def google_oauth_start() -> RedirectResponse:
-    from rag.integrations.google_oauth import oauth_start_url
+    from rag.integrations.google_oauth import oauth_prepare
 
     try:
-        # In production you should generate and validate `state` (CSRF protection).
-        url = oauth_start_url(state="tool-agent")
+        url, _state = oauth_prepare()
         return RedirectResponse(url=url)
     except Exception as exc:
         logging.exception("Google OAuth start failed")
@@ -56,7 +55,11 @@ def google_oauth_start() -> RedirectResponse:
 
 
 @app.get("/oauth/google/callback")
-def google_oauth_callback(code: str | None = None, error: str | None = None) -> dict:
+def google_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> dict:
     if error:
         raise HTTPException(status_code=400, detail=f"Google OAuth error: {error}")
     if not code:
@@ -64,8 +67,12 @@ def google_oauth_callback(code: str | None = None, error: str | None = None) -> 
 
     from rag.integrations.google_oauth import oauth_exchange_code
 
-    oauth_exchange_code(code)
-    return {"ok": True, "connected": True}
+    try:
+        oauth_exchange_code(code, state=state)
+        return {"ok": True, "connected": True}
+    except Exception as exc:
+        logging.exception("Google OAuth callback failed")
+        raise HTTPException(status_code=500, detail=f"OAuth token exchange failed: {exc}")
 
 
 @app.post("/oauth/google/logout")
