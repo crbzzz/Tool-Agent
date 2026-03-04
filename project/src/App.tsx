@@ -5,6 +5,17 @@ import SettingsPage from './components/SettingsPage';
 
 type View = 'chat' | 'settings';
 
+type Theme = 'light' | 'dark';
+
+function getInitialTheme(): Theme {
+  try {
+    const raw = (localStorage.getItem('bart_ai.theme') || '').toLowerCase();
+    return raw === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
 function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [resetCounter, setResetCounter] = useState(0);
@@ -17,6 +28,19 @@ function App() {
     }
   });
   const [googleConnected, setGoogleConnected] = useState(false);
+  const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bart_ai.theme', theme);
+    } catch {
+      // ignore
+    }
+
+    const root = document.documentElement;
+    if (theme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+  }, [theme]);
 
   const refreshGoogleStatus = useCallback(async () => {
     const r = await fetch('/oauth/google/status');
@@ -42,6 +66,8 @@ function App() {
           onBackToChat={() => setView('chat')}
           googleConnected={googleConnected}
           refreshGoogleStatus={refreshGoogleStatus}
+          theme={theme}
+          onThemeChange={setTheme}
         />
       );
     }
@@ -54,10 +80,10 @@ function App() {
         onOpenSettings={() => setView('settings')}
       />
     );
-  }, [googleConnected, refreshGoogleStatus, resetCounter, view]);
+  }, [googleConnected, refreshGoogleStatus, resetCounter, theme, view]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 flex">
+    <div className="min-h-screen flex bg-slate-50 dark:bg-slate-950 transition-colors">
       <Sidebar
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
