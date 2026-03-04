@@ -1,0 +1,28 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local OAuth tokens
+.secrets/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Local data (indexes, caches)
+data/
+
+# Editor
+.vscode/

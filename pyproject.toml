@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tool-agent"
+version = "0.1.0"
+description = "Production-minded Mistral Agents orchestrator with tool-calling (RAG skeleton)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "mistralai>=1.0.0",
+  "requests>=2.31",
+  "pydantic>=2.6",
+  "python-dotenv>=1.0",
+  "google-auth>=2.27",
+  "google-auth-oauthlib>=1.2",
+  "google-api-python-client>=2.120",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rag*", "api*"]
