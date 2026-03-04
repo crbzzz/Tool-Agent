@@ -1,15 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send, Menu, Bot, User, Mic } from 'lucide-react';
+import { Send, Menu, Bot, User, Mic, Paperclip } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
+type MessageKind = 'text' | 'file';
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  apiContent?: string;
+  kind?: MessageKind;
+  fileName?: string;
   timestamp: Date;
 }
 
@@ -58,6 +63,11 @@ export default function ChatInterface({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+
+  const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -169,26 +179,32 @@ export default function ChatInterface({
     }
   };
 
-  const handleSend = async () => {
+  const sendMessage = async (
+    content: string,
+    opts?: { displayContent?: string; kind?: MessageKind; fileName?: string }
+  ) => {
+    const text = (content || '').trim();
     if (!googleConnected) return;
-    if (!input.trim() || isLoading) return;
+    if (!text || isLoading) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim(),
+      content: typeof opts?.displayContent === 'string' ? opts.displayContent : text,
+      apiContent: text,
+      kind: opts?.kind,
+      fileName: opts?.fileName,
       timestamp: new Date(),
     };
 
     setMessages((prev) => [...prev, userMessage]);
-    setInput('');
     setIsLoading(true);
 
     try {
       const r = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage.content, session_id: sessionId }),
+        body: JSON.stringify({ message: userMessage.apiContent ?? userMessage.content, session_id: sessionId }),
       });
 
       if (!r.ok) {
@@ -219,6 +235,72 @@ export default function ChatInterface({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSend = async () => {
+    if (!input.trim()) return;
+    const current = input.trim();
+    setInput('');
+    await sendMessage(current);
+  };
+
+  const uploadDocument = async (file: File) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+
+    const r = await fetch('/documents/upload', { method: 'POST', body: form });
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(text || `HTTP ${r.status}`);
+    }
+    const data = (await r.json()) as {
+      ok?: boolean;
+      data?: { path?: string; original_name?: string; size_bytes?: number; content_type?: string };
+      error?: string | null;
+    };
+    const p = data?.data?.path;
+    if (!p) throw new Error(data?.error || 'Upload failed');
+    return data.data;
+  };
+
+  const attachFileAndSend = async (file: File) => {
+    if (!googleConnected) {
+      showToast('Connect Google to send a message...');
+      return;
+    }
+    if (isLoading || isUploadingDocument) return;
+
+    setIsUploadingDocument(true);
+    try {
+      const uploaded = await uploadDocument(file);
+      const question = input.trim();
+      const name = uploaded.original_name || file.name || 'document';
+      const path = uploaded.path || '';
+
+      const msg = question
+        ? `Fichier ajouté: ${name}\nChemin: ${path}\n\nQuestion: ${question}`
+        : `Fichier ajouté: ${name}\nChemin: ${path}\n\nTâche: extrait le texte (doc_extract_any) puis fais un résumé.`;
+
+      setInput('');
+      await sendMessage(msg, { kind: 'file', displayContent: '', fileName: name });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsUploadingDocument(false);
+      dragDepthRef.current = 0;
+      setIsDraggingFile(false);
+    }
+  };
+
+  const eventHasFiles = (dt: DataTransfer | null) => {
+    if (!dt) return false;
+    if (dt.files && dt.files.length > 0) return true;
+    if (dt.items) {
+      for (let i = 0; i < dt.items.length; i++) {
+        if (dt.items[i]?.kind === 'file') return true;
+      }
+    }
+    return false;
   };
 
   const startRecording = async () => {
@@ -363,7 +445,47 @@ export default function ChatInterface({
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-6 py-8">
+      <main
+        className="flex-1 overflow-y-auto px-6 py-8 relative"
+        onDragEnter={(e) => {
+          if (!eventHasFiles(e.dataTransfer)) return;
+          e.preventDefault();
+          dragDepthRef.current += 1;
+          setIsDraggingFile(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setIsDraggingFile(false);
+        }}
+        onDragOver={(e) => {
+          if (!eventHasFiles(e.dataTransfer)) return;
+          e.preventDefault();
+        }}
+        onDrop={(e) => {
+          if (!eventHasFiles(e.dataTransfer)) return;
+          e.preventDefault();
+          dragDepthRef.current = 0;
+          setIsDraggingFile(false);
+
+          const f = e.dataTransfer.files?.[0];
+          if (f) attachFileAndSend(f);
+        }}
+      >
+        {isDraggingFile && (
+          <div className="absolute inset-0 flex items-center justify-center z-40 pointer-events-none">
+            <div className="w-full max-w-lg mx-auto">
+              <div className="rounded-2xl border-2 border-dashed border-emerald-400/70 bg-white/70 dark:bg-slate-950/70 backdrop-blur-sm px-6 py-8 text-center transition-all duration-150 ease-out scale-100 opacity-100">
+                <div className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Drop your file to attach
+                </div>
+                <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  The document will be uploaded and sent.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {!googleConnected && (
           <div className="max-w-3xl mx-auto mb-6">
             <div className="bg-amber-50 border border-amber-200 text-amber-900 dark:bg-amber-950/30 dark:border-amber-900 dark:text-amber-100 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
@@ -484,7 +606,16 @@ export default function ChatInterface({
                     </ReactMarkdown>
                   ) : (
                     <div className="text-sm leading-relaxed break-words whitespace-pre-wrap">
-                      {message.content}
+                      {message.kind === 'file' ? (
+                        <div className="flex items-center justify-center">
+                          <Paperclip className="w-5 h-5" aria-hidden="true" />
+                          <span className="sr-only">
+                            Fichier envoyé{message.fileName ? `: ${message.fileName}` : ''}
+                          </span>
+                        </div>
+                      ) : (
+                        message.content
+                      )}
                     </div>
                   )}
                 </div>
@@ -541,9 +672,31 @@ export default function ChatInterface({
               />
             </div>
 
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                // Reset so selecting the same file twice triggers change.
+                e.currentTarget.value = '';
+                if (f) attachFileAndSend(f);
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!googleConnected || isLoading || isUploadingDocument}
+              className="w-12 h-12 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Attach a file"
+            >
+              <Paperclip className="w-5 h-5" />
+            </button>
+
             <button
               onClick={() => (isRecording ? stopRecording() : startRecording())}
-              disabled={!googleConnected || isLoading || isTranscribing}
+              disabled={!googleConnected || isLoading || isTranscribing || isUploadingDocument}
               className="w-12 h-12 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               title={isRecording ? 'Stop recording' : 'Start voice input'}
             >
@@ -552,7 +705,7 @@ export default function ChatInterface({
 
             <button
               onClick={handleSend}
-              disabled={!googleConnected || !input.trim() || isLoading}
+              disabled={!googleConnected || !input.trim() || isLoading || isUploadingDocument}
               className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 hover:from-emerald-500 hover:to-teal-600 text-white rounded-xl flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md"
             >
               <Send className="w-5 h-5" />

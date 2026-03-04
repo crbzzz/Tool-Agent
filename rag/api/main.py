@@ -29,6 +29,14 @@ load_dotenv(find_dotenv(".env"), override=False)
 app = FastAPI(title="Bart AI API", version="0.1.0")
 
 
+def _uploads_dir() -> Path:
+    # rag/api/main.py -> rag/ -> repo root
+    repo_root = Path(__file__).resolve().parents[2]
+    up = repo_root / "rag" / "data" / "uploads"
+    up.mkdir(parents=True, exist_ok=True)
+    return up
+
+
 def _mount_ui_if_present(app: FastAPI) -> None:
     """Mount the built desktop UI (Vite dist) if available.
 
@@ -214,6 +222,52 @@ def chat(req: ChatRequest) -> ChatResponse:
         )
     except Exception as exc:
         logging.exception("/chat failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/documents/upload")
+async def documents_upload(file: UploadFile = File(...)) -> dict:
+    """Upload a user-provided document for later extraction by doc_* tools.
+
+    The file is stored under rag/data/uploads so it remains readable in ACCESS_MODE=safe
+    with the default WORKSPACE_ROOT.
+
+    Returns: { ok: true, data: { path, original_name, size_bytes, content_type } }
+    """
+
+    try:
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        uploads_dir = _uploads_dir()
+        suffix = ""
+        try:
+            # Keep extension if present in the filename
+            suffix = Path(file.filename or "").suffix
+        except Exception:
+            suffix = ""
+
+        safe_name = (Path(file.filename or "uploaded").name or "uploaded")
+        # Prefix with uuid to avoid collisions
+        out_name = f"{uuid.uuid4().hex}_{safe_name}"
+        out_path = uploads_dir / out_name
+        out_path.write_bytes(data)
+
+        return {
+            "ok": True,
+            "data": {
+                "path": str(out_path.resolve()),
+                "original_name": safe_name,
+                "size_bytes": len(data),
+                "content_type": file.content_type,
+            },
+            "error": None,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("/documents/upload failed")
         raise HTTPException(status_code=500, detail=str(exc))
 
 

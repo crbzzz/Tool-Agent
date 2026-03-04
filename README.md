@@ -15,7 +15,7 @@ copy .env.example .env
 2) Fill in:
 
 - `MISTRAL_API_KEY`
-- `MISTRAL_AGENT_ID` (example: `ag_019cb5ef077f777a9dcf3d569eXXXXX`)
+- `MISTRAL_AGENT_ID` (example: `ag_019cb5ef077fXXXXXXXXXXXX`)
 - `INDEX_DIR` (optional, defaults to `data/indexes/faiss`)
 
 3) Install:

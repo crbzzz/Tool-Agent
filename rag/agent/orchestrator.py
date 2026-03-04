@@ -15,6 +15,12 @@ from rag.agent.mistral_client import (
     extract_assistant_message,
     extract_assistant_message_dict,
 )
+from rag.agent.response_contract import (
+    ModelOutputValidationError,
+    normalized_response_to_markdown,
+    parse_final_response_from_text,
+    parse_tool_calls_from_text,
+)
 from rag.agent.policy import build_policy_message
 from rag.agent.tool_registry import ToolRegistry, build_default_registry
 
@@ -209,45 +215,30 @@ class AgentOrchestrator:
         last_content: str = ""
 
         def _tool_calls_from_content(content: str) -> List[NormalizedToolCall]:
-            """Fallback: accept tool calls embedded as pure JSON in assistant content.
+            """Fallback: parse tool calls embedded as JSON inside assistant content."""
 
-            Some agent configurations output tool calls as JSON text instead of using
-            the structured tool_calls field. We only accept *pure* JSON objects with
-            an expected shape.
+            if not isinstance(content, str) or not content.strip():
+                return []
+            return parse_tool_calls_from_text(content)
+
+        def _best_effort_final_answer(content: str) -> str:
+            """Convert contract-style JSON final responses to a legacy markdown string.
+
+            If content is not JSON, returns it unchanged.
+            If content is JSON but violates the contract, returns it unchanged.
             """
 
             if not isinstance(content, str):
-                return []
-            text = content.strip()
-            if not (text.startswith("{") and text.endswith("}")):
-                return []
+                return str(content)
+            if not content.strip():
+                return ""
             try:
-                obj = json.loads(text)
-            except Exception:
-                return []
-
-            def _one(tc: Any) -> Optional[NormalizedToolCall]:
-                if not isinstance(tc, dict):
-                    return None
-                name = tc.get("name")
-                args = tc.get("arguments")
-                if not isinstance(name, str) or not name.strip():
-                    return None
-                if not isinstance(args, dict):
-                    return None
-                return NormalizedToolCall(name=name, arguments=args, call_id=None)
-
-            calls: List[NormalizedToolCall] = []
-            if isinstance(obj, dict) and isinstance(obj.get("tool_call"), dict):
-                one = _one(obj.get("tool_call"))
-                if one:
-                    calls.append(one)
-            if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list):
-                for tc in obj.get("tool_calls"):
-                    one = _one(tc)
-                    if one:
-                        calls.append(one)
-            return calls
+                parsed = parse_final_response_from_text(content)
+                if parsed is None:
+                    return content
+                return normalized_response_to_markdown(parsed)
+            except ModelOutputValidationError:
+                return content
 
         def _run_tools(tool_calls: Any) -> None:
             for call in tool_calls:
@@ -307,7 +298,7 @@ class AgentOrchestrator:
             if not tool_calls:
                 # Preserve assistant response in the session history.
                 messages.append(assistant_msg)
-                return OrchestratorResult(final_answer=content, tool_trace=tool_trace), messages
+                return OrchestratorResult(final_answer=_best_effort_final_answer(content), tool_trace=tool_trace), messages
 
             # Important: maintain correct message order: user -> assistant -> tool -> assistant...
             # The assistant message that contained the tool_calls must be present before tool outputs.
@@ -323,8 +314,9 @@ class AgentOrchestrator:
             if tool_calls:
                 logger.warning("Agent requested tools after max_tool_steps; returning best-effort answer")
             # Append the final assistant message for session continuity.
+            rendered = _best_effort_final_answer(str(content or ""))
             messages.append({"role": "assistant", "content": str(content or "")})
-            return OrchestratorResult(final_answer=content or last_content or "", tool_trace=tool_trace), messages
+            return OrchestratorResult(final_answer=rendered or last_content or "", tool_trace=tool_trace), messages
         except Exception:
             fallback = last_content.strip() or "I couldn't complete the task within the tool step limit."
             return OrchestratorResult(final_answer=fallback, tool_trace=tool_trace), messages
