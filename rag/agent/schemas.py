@@ -83,6 +83,186 @@ SEND_EMAIL_PARAMS_SCHEMA: Dict[str, Any] = {
 }
 
 
+LOCAL_LIST_DIR_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "max_entries": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+LOCAL_READ_TEXT_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "max_bytes": {"type": "integer", "minimum": 256, "maximum": 2000000},
+        "encoding": {"type": "string"},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+LOCAL_WRITE_TEXT_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "content": {"type": "string"},
+        "overwrite": {"type": "boolean", "default": False},
+        "create_parents": {"type": "boolean", "default": False},
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["path", "content", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+LOCAL_DELETE_PATH_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "recursive": {"type": "boolean", "default": False},
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["path", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+LOCAL_SEARCH_FILES_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "root": {"type": "string", "minLength": 1},
+        "pattern": {"type": "string", "default": "*"},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200},
+        "include_dirs": {"type": "boolean", "default": False},
+    },
+    "required": ["root"],
+    "additionalProperties": False,
+}
+
+
+FS_LIST_DIR_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "recursive": {"type": "boolean", "default": False},
+        "max_entries": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 2000},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+FS_SEARCH_FILES_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "root": {"type": "string", "minLength": 1},
+        "pattern": {"type": "string", "default": "*"},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 20000, "default": 1000},
+        "include_dirs": {"type": "boolean", "default": False},
+    },
+    "required": ["root"],
+    "additionalProperties": False,
+}
+
+
+FS_READ_FILE_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "mode": {"type": "string", "enum": ["text", "binary"], "default": "text"},
+        "max_chars": {"type": "integer", "minimum": 256, "maximum": 2000000, "default": 8000},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+FS_WRITE_FILE_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "content": {"type": "string"},
+        "overwrite": {"type": "boolean", "default": False},
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["path", "content", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+FS_DELETE_PATH_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "recursive": {"type": "boolean", "default": False},
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["path", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+FS_MOVE_PATH_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "src_path": {"type": "string", "minLength": 1},
+        "dst_path": {"type": "string", "minLength": 1},
+        "overwrite": {"type": "boolean", "default": False},
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["src_path", "dst_path", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+FS_MKDIR_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "parents": {"type": "boolean", "default": True},
+        "exist_ok": {"type": "boolean", "default": True},
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["path", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+SYSTEM_GET_USER_INFO_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+SYSTEM_GET_PATHS_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+SYSTEM_GET_ENV_VAR_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "variable_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name of the environment variable.",
+        }
+    },
+    "required": ["variable_name"],
+    "additionalProperties": False,
+}
+
+
 TOOL_PARAM_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "search_documents": SEARCH_DOCUMENTS_PARAMS_SCHEMA,
     "fetch_url": FETCH_URL_PARAMS_SCHEMA,
@@ -92,6 +272,21 @@ TOOL_PARAM_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "list_drive_files": LIST_DRIVE_FILES_PARAMS_SCHEMA,
     "get_drive_file": GET_DRIVE_FILE_PARAMS_SCHEMA,
     "send_email": SEND_EMAIL_PARAMS_SCHEMA,
+    "local_list_dir": LOCAL_LIST_DIR_PARAMS_SCHEMA,
+    "local_read_text": LOCAL_READ_TEXT_PARAMS_SCHEMA,
+    "local_write_text": LOCAL_WRITE_TEXT_PARAMS_SCHEMA,
+    "local_delete_path": LOCAL_DELETE_PATH_PARAMS_SCHEMA,
+    "local_search_files": LOCAL_SEARCH_FILES_PARAMS_SCHEMA,
+    "fs_list_dir": FS_LIST_DIR_PARAMS_SCHEMA,
+    "fs_search_files": FS_SEARCH_FILES_PARAMS_SCHEMA,
+    "fs_read_file": FS_READ_FILE_PARAMS_SCHEMA,
+    "fs_write_file": FS_WRITE_FILE_PARAMS_SCHEMA,
+    "fs_delete_path": FS_DELETE_PATH_PARAMS_SCHEMA,
+    "fs_move_path": FS_MOVE_PATH_PARAMS_SCHEMA,
+    "fs_mkdir": FS_MKDIR_PARAMS_SCHEMA,
+    "system_get_user_info": SYSTEM_GET_USER_INFO_PARAMS_SCHEMA,
+    "system_get_paths": SYSTEM_GET_PATHS_PARAMS_SCHEMA,
+    "system_get_environment_variable": SYSTEM_GET_ENV_VAR_PARAMS_SCHEMA,
 }
 
 
@@ -158,6 +353,126 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "name": "send_email",
             "description": "Send an email (stub; requires explicit user_confirmation=true).",
             "parameters": SEND_EMAIL_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "local_list_dir",
+            "description": "List a local directory within allowlisted roots (LOCAL_FS_ALLOWED_ROOTS).",
+            "parameters": LOCAL_LIST_DIR_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "local_read_text",
+            "description": "Read a local text file within allowlisted roots (LOCAL_FS_ALLOWED_ROOTS).",
+            "parameters": LOCAL_READ_TEXT_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "local_write_text",
+            "description": "Write a local text file (disabled unless LOCAL_FS_ENABLE_DESTRUCTIVE=true; requires user_confirmation=true).",
+            "parameters": LOCAL_WRITE_TEXT_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "local_delete_path",
+            "description": "Delete a local file/folder (disabled unless LOCAL_FS_ENABLE_DESTRUCTIVE=true; requires user_confirmation=true).",
+            "parameters": LOCAL_DELETE_PATH_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "local_search_files",
+            "description": "Search for files under a local root using a glob pattern (within LOCAL_FS_ALLOWED_ROOTS).",
+            "parameters": LOCAL_SEARCH_FILES_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_list_dir",
+            "description": "List a directory (ACCESS_MODE enforced).",
+            "parameters": FS_LIST_DIR_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_search_files",
+            "description": "Search files under a root using a glob pattern (ACCESS_MODE enforced).",
+            "parameters": FS_SEARCH_FILES_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_read_file",
+            "description": "Read a file as text or base64 (ACCESS_MODE enforced).",
+            "parameters": FS_READ_FILE_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_write_file",
+            "description": "Write a file (requires user_confirmation=true; ACCESS_MODE enforced).",
+            "parameters": FS_WRITE_FILE_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_delete_path",
+            "description": "Delete a path (requires user_confirmation=true; ACCESS_MODE enforced).",
+            "parameters": FS_DELETE_PATH_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_move_path",
+            "description": "Move/rename a path (requires user_confirmation=true; ACCESS_MODE enforced).",
+            "parameters": FS_MOVE_PATH_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_mkdir",
+            "description": "Create a directory (requires user_confirmation=true; ACCESS_MODE enforced).",
+            "parameters": FS_MKDIR_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "system_get_user_info",
+            "description": "Get basic user/OS info (username, home, cwd, desktop, hostname, architecture).",
+            "parameters": SYSTEM_GET_USER_INFO_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "system_get_paths",
+            "description": "Get common OS paths (home, desktop, documents, downloads, temp).",
+            "parameters": SYSTEM_GET_PATHS_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "system_get_environment_variable",
+            "description": "Read a single environment variable value (denylisted names are blocked).",
+            "parameters": SYSTEM_GET_ENV_VAR_PARAMS_SCHEMA,
         },
     },
 ]
