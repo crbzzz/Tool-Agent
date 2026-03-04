@@ -14,6 +14,7 @@ dependencies = [
   "mistralai>=1.0.0",
   "requests>=2.31",
   "pydantic>=2.6",
+  "python-multipart>=0.0.9",
   "python-dotenv>=1.0",
   "google-auth>=2.27",
   "google-auth-oauthlib>=1.2",

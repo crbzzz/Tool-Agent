@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 
 from dotenv import find_dotenv, load_dotenv
@@ -24,6 +26,20 @@ logging.basicConfig(
 load_dotenv(find_dotenv(".env"), override=False)
 
 app = FastAPI(title="Tool-Agent API", version="0.1.0")
+
+
+def _mount_ui_if_present(app: FastAPI) -> None:
+    """Mount the built desktop UI (Vite dist) if available."""
+
+    # rag/api/main.py -> rag/ -> repo root
+    repo_root = Path(__file__).resolve().parents[2]
+    dist_dir = repo_root / "project" / "dist"
+    index_html = dist_dir / "index.html"
+    if index_html.exists() and dist_dir.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(dist_dir), html=True), name="ui")
+
+
+_mount_ui_if_present(app)
 
 
 @app.get("/health")
@@ -113,4 +129,35 @@ def chat(req: ChatRequest) -> ChatResponse:
         )
     except Exception as exc:
         logging.exception("/chat failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/voice/transcribe")
+async def voice_transcribe(
+    file: UploadFile = File(...),
+    language: str | None = Form(None),
+) -> dict:
+    """Transcribe uploaded audio with Mistral Voxtral.
+
+    Returns: { ok: true, text: "..." }
+    """
+
+    try:
+        audio_bytes = await file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        from rag.integrations.voxtral import transcribe_audio
+
+        text = transcribe_audio(
+            audio_bytes=audio_bytes,
+            filename=file.filename or "audio.webm",
+            content_type=file.content_type,
+            language=language,
+        )
+        return {"ok": True, "text": text}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("/voice/transcribe failed")
         raise HTTPException(status_code=500, detail=str(exc))
