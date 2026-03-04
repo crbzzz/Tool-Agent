@@ -31,6 +31,17 @@ def search_documents(args: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(top_k, int):
         return {"ok": False, "data": None, "error": "Invalid `top_k` (must be int)"}
 
+    # First: try the lightweight extracted store (ingested via rag_ingest_extracted).
+    try:
+        from rag.tools.rag_ingest_extracted import simple_search
+
+        r = simple_search({"query": query, "top_k": top_k})
+        if isinstance(r, dict) and r.get("ok") and (r.get("data") or {}).get("results"):
+            return r
+    except Exception:
+        # Ignore and fall back to FAISS placeholder checks.
+        pass
+
     index_dir = _index_dir()
     if not index_dir.exists():
         return {

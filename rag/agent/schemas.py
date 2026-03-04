@@ -263,8 +263,97 @@ SYSTEM_GET_ENV_VAR_PARAMS_SCHEMA: Dict[str, Any] = {
 }
 
 
+DOC_DETECT_TYPE_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {"path": {"type": "string", "description": "Path to the file."}},
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+DOC_READ_TEXT_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Path to a text file."},
+        "max_chars": {"type": "integer", "minimum": 200, "maximum": 200000},
+        "encoding_hint": {"type": "string", "description": "Optional encoding hint like 'utf-8'."},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+DOC_EXTRACT_PDF_TEXT_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Path to the PDF."},
+        "page_start": {"type": "integer", "minimum": 0},
+        "page_end": {"type": "integer", "minimum": 0},
+        "max_chars_per_page": {"type": "integer", "minimum": 200, "maximum": 50000},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+DOC_OCR_IMAGE_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Path to an image file (png/jpg/webp)."},
+        "max_chars": {"type": "integer", "minimum": 200, "maximum": 200000},
+        "language": {"type": "string", "description": "OCR language hint, e.g. 'eng'."},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+DOC_EXTRACT_DOCX_TEXT_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Path to the DOCX file."},
+        "max_chars": {"type": "integer", "minimum": 200, "maximum": 400000},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+DOC_EXTRACT_ANY_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Path to the document."},
+        "max_chars": {"type": "integer", "minimum": 200, "maximum": 400000},
+        "prefer_ocr": {"type": "boolean", "description": "If true, force OCR if possible."},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
+
+
+RAG_INGEST_EXTRACTED_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "source_name": {"type": "string", "description": "Human-readable source label (filename, etc.)."},
+        "text": {"type": "string", "description": "Extracted text to ingest."},
+        "chunk_size": {"type": "integer", "minimum": 200, "maximum": 5000},
+        "chunk_overlap": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "user_confirmation": {"type": "boolean", "enum": [True]},
+    },
+    "required": ["source_name", "text", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
 TOOL_PARAM_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "search_documents": SEARCH_DOCUMENTS_PARAMS_SCHEMA,
+    "doc_detect_type": DOC_DETECT_TYPE_PARAMS_SCHEMA,
+    "doc_read_text": DOC_READ_TEXT_PARAMS_SCHEMA,
+    "doc_extract_pdf_text": DOC_EXTRACT_PDF_TEXT_PARAMS_SCHEMA,
+    "doc_ocr_image": DOC_OCR_IMAGE_PARAMS_SCHEMA,
+    "doc_extract_docx_text": DOC_EXTRACT_DOCX_TEXT_PARAMS_SCHEMA,
+    "doc_extract_any": DOC_EXTRACT_ANY_PARAMS_SCHEMA,
+    "rag_ingest_extracted": RAG_INGEST_EXTRACTED_PARAMS_SCHEMA,
     "fetch_url": FETCH_URL_PARAMS_SCHEMA,
     "search_web": SEARCH_WEB_PARAMS_SCHEMA,
     "list_emails": LIST_EMAILS_PARAMS_SCHEMA,
@@ -297,6 +386,62 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "name": "search_documents",
             "description": "Search local documents (RAG). Returns relevant chunks if available.",
             "parameters": SEARCH_DOCUMENTS_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "doc_detect_type",
+            "description": "Detect file type and basic metadata for a given path.",
+            "parameters": DOC_DETECT_TYPE_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "doc_read_text",
+            "description": "Read a text file safely and return up to max_chars.",
+            "parameters": DOC_READ_TEXT_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "doc_extract_pdf_text",
+            "description": "Extract text from a PDF file by pages.",
+            "parameters": DOC_EXTRACT_PDF_TEXT_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "doc_ocr_image",
+            "description": "Perform OCR on an image and return extracted text.",
+            "parameters": DOC_OCR_IMAGE_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "doc_extract_docx_text",
+            "description": "Extract text from a DOCX document.",
+            "parameters": DOC_EXTRACT_DOCX_TEXT_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "doc_extract_any",
+            "description": "Extract text from a document (pdf/image/docx/text). Backend picks the right extractor.",
+            "parameters": DOC_EXTRACT_ANY_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_ingest_extracted",
+            "description": "Ingest extracted text into the RAG index (requires confirmation).",
+            "parameters": RAG_INGEST_EXTRACTED_PARAMS_SCHEMA,
         },
     },
     {

@@ -23,6 +23,10 @@ dependencies = [
   "google-auth>=2.27",
   "google-auth-oauthlib>=1.2",
   "google-api-python-client>=2.120",
+  "pypdf>=4.2.0",
+  "python-docx>=1.1.0",
+  "pillow>=10.0.0",
+  "pytesseract>=0.3.10",
 ]
 
 [tool.setuptools]

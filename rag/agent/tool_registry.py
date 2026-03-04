@@ -18,6 +18,14 @@ class ToolRegistry:
 
 
 def build_default_registry() -> ToolRegistry:
+    from rag.tools.documents import (
+        doc_detect_type,
+        doc_extract_any,
+        doc_extract_docx_text,
+        doc_extract_pdf_text,
+        doc_ocr_image,
+        doc_read_text,
+    )
     from rag.tools.drive import get_drive_file, list_drive_files
     from rag.tools.email_send import send_email
     from rag.tools.fs import (
@@ -37,6 +45,7 @@ def build_default_registry() -> ToolRegistry:
         local_search_files,
         local_write_text,
     )
+    from rag.tools.rag_ingest_extracted import ingest_extracted
     from rag.tools.rag_search import search_documents
     from rag.tools.system import (
         system_get_environment_variable,
@@ -49,6 +58,13 @@ def build_default_registry() -> ToolRegistry:
     return ToolRegistry(
         tools={
             "search_documents": search_documents,
+            "doc_detect_type": doc_detect_type,
+            "doc_read_text": doc_read_text,
+            "doc_extract_pdf_text": doc_extract_pdf_text,
+            "doc_ocr_image": doc_ocr_image,
+            "doc_extract_docx_text": doc_extract_docx_text,
+            "doc_extract_any": doc_extract_any,
+            "rag_ingest_extracted": ingest_extracted,
             "fetch_url": fetch_url,
             "search_web": search_web,
             "list_emails": list_emails,
