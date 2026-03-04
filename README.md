@@ -1,6 +1,8 @@
-# Tool-Agent
+# Bart AI (Tool-Agent)
 
 Production-minded Mistral Agents orchestrator with tool-calling for a RAG project.
+
+The primary interface is a desktop app window (Bart AI) that embeds the React UI.
 
 ## Setup
 
@@ -25,16 +27,32 @@ pip install -e .
 ## Run API
 
 ```bash
-uvicorn api.main:app --reload
+uvicorn api.main:app --reload --port 8002
 ```
 
-On Windows, to ensure you run with the virtualenv dependencies:
+## Desktop App (Bart AI)
+
+1) Build the UI once:
 
 ```bash
-.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload
+cd project
+npm install
+npm run build
 ```
 
-## Desktop UI (optional)
+2) Install Python deps:
+
+```bash
+pip install -e .
+```
+
+3) Launch Bart AI:
+
+```bash
+python bart_ai_desktop.py
+```
+
+## Legacy Desktop UI (Tkinter)
 
 Start the API first, then run:
 
@@ -51,7 +69,7 @@ This project includes a minimal local OAuth flow to connect Gmail + Drive tools.
 - Configure **OAuth consent screen** (External is fine for local testing)
 - Create **OAuth Client ID** (Application type: Desktop app or Web application)
 - Add an **Authorized redirect URI**:
-	- `http://127.0.0.1:8000/oauth/google/callback`
+	- `http://127.0.0.1:8002/oauth/google/callback`
 
 2) Put these in your `.env` (see `.env.example`):
 - `GOOGLE_CLIENT_ID`
@@ -61,25 +79,25 @@ This project includes a minimal local OAuth flow to connect Gmail + Drive tools.
 3) Start the API:
 
 ```bash
-uvicorn api.main:app --reload
+uvicorn api.main:app --reload --port 8002
 ```
 
 4) Open in a browser:
-- `http://127.0.0.1:8000/oauth/google/start`
+- `http://127.0.0.1:8002/oauth/google/start`
 
 5) Check status:
-- `http://127.0.0.1:8000/oauth/google/status`
+- `http://127.0.0.1:8002/oauth/google/status`
 
 Logout (delete local token):
 
 ```bash
-curl.exe -X POST http://127.0.0.1:8000/oauth/google/logout
+curl.exe -X POST http://127.0.0.1:8002/oauth/google/logout
 ```
 
 ## Try `/chat`
 
 ```bash
-curl.exe -X POST http://127.0.0.1:8000/chat -H "Content-Type: application/json" --data-binary "{`"message`":`"Search my docs for onboarding notes and summarize`"}"
+curl.exe -X POST http://127.0.0.1:8002/chat -H "Content-Type: application/json" --data-binary "{`"message`":`"Search my docs for onboarding notes and summarize`"}"
 ```
 
 ### Sessions (memory)
@@ -92,7 +110,7 @@ curl.exe -X POST http://127.0.0.1:8000/chat -H "Content-Type: application/json" 
 Health check:
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8002/health
 ```
 
 ## Local filesystem access (Windows)

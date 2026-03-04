@@ -17,6 +17,10 @@ import threading
 import time
 import base64
 import hashlib
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
@@ -114,32 +118,113 @@ def _purge_expired_states() -> None:
         _state_store.pop(k, None)
 
 
-def oauth_prepare() -> Tuple[str, str]:
+def oauth_prepare(return_to: str | None = None) -> Tuple[str, str]:
     """Create an auth URL and state, storing PKCE verifier for the callback."""
 
     flow = _build_flow()
     state = secrets.token_urlsafe(24)
     verifier = _pkce_verifier()
-    challenge = _pkce_challenge(verifier)
+    # Let google-auth-oauthlib compute the challenge from this verifier.
+    flow.code_verifier = verifier
 
     with _state_lock:
         _purge_expired_states()
-        _state_store[state] = {"ts": time.time(), "verifier": verifier}
+        _state_store[state] = {"ts": time.time(), "verifier": verifier, "return_to": return_to}
 
     auth_url, _state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
         state=state,
-        code_challenge=challenge,
-        code_challenge_method="S256",
     )
     return auth_url, state
 
 
+def pop_state(state: str) -> Dict[str, Any] | None:
+    """Pop and return the stored state entry (verifier, return_to).
+
+    Returns None if the state is missing/expired.
+    """
+
+    with _state_lock:
+        _purge_expired_states()
+        entry = _state_store.pop(state, None)
+    return entry
+
+
 def _redirect_uri() -> str:
     # Must match what you configure in Google Cloud Console.
-    return os.environ.get("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/oauth/google/callback")
+    if os.environ.get("GOOGLE_REDIRECT_URI"):
+        return os.environ["GOOGLE_REDIRECT_URI"]
+
+    # Desktop launcher defaults to 8002; keep a sensible local default.
+    port = os.environ.get("BART_AI_PORT") or "8002"
+    return f"http://127.0.0.1:{port}/oauth/google/callback"
+
+
+def _token_uri() -> str:
+    cfg = _client_config()
+    # token_uri is identical for both client types.
+    return str(cfg["installed"]["token_uri"])
+
+
+def _manual_exchange_code(code: str, verifier: str) -> Credentials:
+    """Exchange code for tokens via a direct POST to Google's token endpoint.
+
+    This is a fallback when library PKCE propagation is unreliable.
+    """
+
+    token_uri = _token_uri()
+    redirect_uri = _redirect_uri()
+    client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise RuntimeError("GOOGLE_CLIENT_ID and/or GOOGLE_CLIENT_SECRET are not set")
+
+    form = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+        "code_verifier": verifier,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    data = urllib.parse.urlencode(form).encode("utf-8")
+    req = urllib.request.Request(token_uri, data=data, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = resp.read().decode("utf-8")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+        raise RuntimeError(f"Token endpoint HTTP {exc.code}: {body}")
+    except URLError as exc:
+        raise RuntimeError(f"Token endpoint unreachable: {exc}")
+
+    token_data = json.loads(payload or "{}")
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise RuntimeError(f"Token endpoint response missing access_token: {token_data}")
+
+    creds = Credentials(
+        token=access_token,
+        refresh_token=token_data.get("refresh_token"),
+        token_uri=token_uri,
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=_scopes(),
+    )
+
+    expires_in = token_data.get("expires_in")
+    if isinstance(expires_in, (int, float)):
+        creds.expiry = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+
+    if token_data.get("id_token"):
+        # google-auth stores id_token as a plain attribute.
+        setattr(creds, "id_token", token_data.get("id_token"))
+
+    return creds
 
 
 def _scopes() -> list[str]:
@@ -193,7 +278,7 @@ def oauth_start_url(state: str) -> str:
 
     flow = _build_flow()
     verifier = _pkce_verifier()
-    challenge = _pkce_challenge(verifier)
+    flow.code_verifier = verifier
     with _state_lock:
         _purge_expired_states()
         _state_store[state] = {"ts": time.time(), "verifier": verifier}
@@ -202,25 +287,38 @@ def oauth_start_url(state: str) -> str:
         include_granted_scopes="true",
         prompt="consent",
         state=state,
-        code_challenge=challenge,
-        code_challenge_method="S256",
     )
     return auth_url
 
 
-def oauth_exchange_code(code: str, state: Optional[str] = None) -> Credentials:
+def oauth_exchange_code(
+    code: str,
+    state: Optional[str] = None,
+    verifier: Optional[str] = None,
+) -> Credentials:
     """Exchange authorization code for tokens and store them locally."""
 
-    verifier: Optional[str] = None
-    if state:
-        with _state_lock:
-            entry = _state_store.pop(state, None)
-            if entry:
-                verifier = entry.get("verifier")
+    if not verifier and state:
+        entry = pop_state(state)
+        if entry:
+            verifier = entry.get("verifier")
 
     flow = _build_flow()
     if verifier:
-        flow.fetch_token(code=code, code_verifier=verifier)
+        # Set on the Flow and also pass explicitly to ensure the token
+        # request includes `code_verifier` across library versions.
+        flow.code_verifier = verifier
+        try:
+            # Pass code_verifier explicitly to guarantee it is sent.
+            flow.fetch_token(code=code, code_verifier=verifier)
+        except Exception as exc:
+            msg = str(exc)
+            if "Missing code verifier" in msg or "code verifier" in msg or "invalid_grant" in msg:
+                logger.warning("Flow.fetch_token failed (%s); falling back to manual token exchange", msg)
+                creds = _manual_exchange_code(code=code, verifier=verifier)
+                save_credentials(creds)
+                return creds
+            raise
     else:
         # Best-effort fallback: some flows may not require PKCE.
         flow.fetch_token(code=code)

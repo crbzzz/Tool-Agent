@@ -19,6 +19,7 @@ dependencies = [
   "webrtcvad>=2.0.10; platform_system != 'Windows'",
   "python-multipart>=0.0.9",
   "python-dotenv>=1.0",
+  "pywebview>=5.0",
   "google-auth>=2.27",
   "google-auth-oauthlib>=1.2",
   "google-api-python-client>=2.120",

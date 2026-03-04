@@ -81,8 +81,7 @@ def main() -> None:
     except Exception as exc:
         server.should_exit = True
         raise SystemExit(
-            "pywebview is required for the desktop app. Install it with: pip install pywebview\n"
-            + str(exc)
+            f"pywebview is required for the desktop app. Install it with: pip install pywebview\n{exc}"
         )
 
     class _JsApi:

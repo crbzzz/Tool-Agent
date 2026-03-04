@@ -7,9 +7,9 @@ import os
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from dotenv import find_dotenv, load_dotenv
 
@@ -26,7 +26,25 @@ logging.basicConfig(
 # Load local .env (if present) for all endpoints, including OAuth routes.
 load_dotenv(find_dotenv(".env"), override=False)
 
-app = FastAPI(title="Tool-Agent API", version="0.1.0")
+app = FastAPI(title="Bart AI API", version="0.1.0")
+
+
+def _mount_ui_if_present(app: FastAPI) -> None:
+    """Mount the built desktop UI (Vite dist) if available.
+
+    This keeps the project as an application: the desktop launcher opens this UI
+    inside a local webview. The UI build output is not required for API-only usage.
+    """
+
+    # rag/api/main.py -> rag/ -> repo root
+    repo_root = Path(__file__).resolve().parents[2]
+    dist_dir = repo_root / "project" / "dist"
+    index_html = dist_dir / "index.html"
+    if index_html.exists() and dist_dir.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(dist_dir), html=True), name="ui")
+
+
+_mount_ui_if_present(app)
 
 
 def _mount_ui_if_present(app: FastAPI) -> None:
@@ -65,11 +83,18 @@ def google_oauth_status() -> dict:
 
 
 @app.get("/oauth/google/start")
-def google_oauth_start() -> RedirectResponse:
+def google_oauth_start(return_to: str | None = None) -> RedirectResponse:
     from rag.integrations.google_oauth import oauth_prepare
 
+    # Avoid open redirects: only allow local relative paths.
+    if return_to:
+        rt = return_to.strip()
+        if not rt.startswith("/") or rt.startswith("//") or "://" in rt:
+            raise HTTPException(status_code=400, detail="Invalid return_to")
+        return_to = rt
+
     try:
-        url, _state = oauth_prepare()
+        url, _state = oauth_prepare(return_to=return_to)
         return RedirectResponse(url=url)
     except Exception as exc:
         logging.exception("Google OAuth start failed")
@@ -93,14 +118,65 @@ def google_oauth_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing `code` query parameter")
 
-    from rag.integrations.google_oauth import oauth_exchange_code
+    from rag.integrations.google_oauth import oauth_exchange_code, pop_state
 
     try:
-        oauth_exchange_code(code, state=state)
+        verifier = None
+        return_to = None
+        if state:
+            entry = pop_state(state)
+            if entry:
+                verifier = entry.get("verifier")
+                return_to = entry.get("return_to")
+
+        if not verifier:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "OAuth token exchange failed: missing PKCE code verifier. "
+                    "Please restart the Google connection from Settings."
+                ),
+            )
+
+        oauth_exchange_code(code, verifier=verifier)
+
+        if isinstance(return_to, str) and return_to:
+            return RedirectResponse(url=return_to)
+
         return {"ok": True, "connected": True}
+    except HTTPException:
+        raise
     except Exception as exc:
         logging.exception("Google OAuth callback failed")
-        raise HTTPException(status_code=500, detail=f"OAuth token exchange failed: {exc}")
+        msg = str(exc)
+        if "invalid_grant" in msg or "Token endpoint" in msg:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"OAuth token exchange failed: {msg}. "
+                    "Please restart the Google connection from Settings (don’t reuse an old callback URL)."
+                ),
+            )
+        raise HTTPException(status_code=500, detail=f"OAuth token exchange failed: {msg}")
+
+
+@app.get("/oauth/google/connected", response_class=HTMLResponse)
+def google_oauth_connected() -> HTMLResponse:
+        return HTMLResponse(
+                """<!doctype html>
+<html lang=\"en\">
+    <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>Bart AI - Google Connected</title>
+    </head>
+    <body style=\"font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px;\">
+        <h2>Google connecté</h2>
+        <p>Tu peux fermer cet onglet et revenir dans l’application Bart AI.</p>
+    </body>
+</html>""",
+                status_code=200,
+        )
 
 
 @app.post("/oauth/google/logout")
@@ -114,6 +190,14 @@ def google_oauth_logout() -> dict:
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     try:
+        from rag.integrations.google_oauth import is_connected
+
+        if not is_connected():
+            raise HTTPException(
+                status_code=403,
+                detail="Google OAuth is not connected. Open Settings and connect Google to use the chat.",
+            )
+
         orch = get_orchestrator()
         session_id = req.session_id or uuid.uuid4().hex
         session = get_or_create_session(session_id)
