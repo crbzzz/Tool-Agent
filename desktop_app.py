@@ -20,13 +20,13 @@ from tkinter import ttk
 import requests
 
 
-DEFAULT_API_URL = "http://127.0.0.1:8000"
+DEFAULT_API_URL = "http://127.0.0.1:8002"
 
 
 class DesktopApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Tool-Agent Desktop")
+        self.root.title("Bart AI (Legacy)")
         self.root.geometry("900x650")
 
         self.api_url_var = tk.StringVar(value=DEFAULT_API_URL)
