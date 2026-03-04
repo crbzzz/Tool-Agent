@@ -43,10 +43,26 @@ class AgentOrchestrator:
         self.max_tool_steps = max_tool_steps
 
     def run(self, user_message: str) -> OrchestratorResult:
-        """Run the orchestration loop for one user message."""
+        """Run the orchestration loop for one user message (stateless)."""
+
+        messages: List[Dict[str, Any]] = [build_policy_message(), {"role": "user", "content": user_message}]
+        result, _updated = self.run_with_messages(messages)
+        return result
+
+    def run_with_messages(self, messages: List[Dict[str, Any]]) -> tuple[OrchestratorResult, List[Dict[str, Any]]]:
+        """Run the orchestration loop using an existing message list.
+
+        Returns (result, updated_messages).
+        """
 
         tool_trace: List[Dict[str, Any]] = []
-        messages: List[Dict[str, Any]] = [build_policy_message(), {"role": "user", "content": user_message}]
+
+        if not messages:
+            messages = [build_policy_message()]
+
+        # Ensure policy is present once at the beginning.
+        if messages[0].get("role") != "system":
+            messages = [build_policy_message(), *messages]
 
         last_content: str = ""
 
@@ -96,7 +112,9 @@ class AgentOrchestrator:
             last_content = content or last_content
 
             if not tool_calls:
-                return OrchestratorResult(final_answer=content, tool_trace=tool_trace)
+                # Preserve assistant response in the session history.
+                messages.append(assistant_msg)
+                return OrchestratorResult(final_answer=content, tool_trace=tool_trace), messages
 
             # Important: maintain correct message order: user -> assistant -> tool -> assistant...
             # The assistant message that contained the tool_calls must be present before tool outputs.
@@ -111,7 +129,9 @@ class AgentOrchestrator:
             content, tool_calls = extract_assistant_message(response)
             if tool_calls:
                 logger.warning("Agent requested tools after max_tool_steps; returning best-effort answer")
-            return OrchestratorResult(final_answer=content or last_content or "", tool_trace=tool_trace)
+            # Append the final assistant message for session continuity.
+            messages.append({"role": "assistant", "content": str(content or "")})
+            return OrchestratorResult(final_answer=content or last_content or "", tool_trace=tool_trace), messages
         except Exception:
             fallback = last_content.strip() or "I couldn't complete the task within the tool step limit."
-            return OrchestratorResult(final_answer=fallback, tool_trace=tool_trace)
+            return OrchestratorResult(final_answer=fallback, tool_trace=tool_trace), messages

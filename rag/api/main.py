@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
@@ -11,6 +12,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from rag.api.deps import get_orchestrator
 from rag.api.schemas import ChatRequest, ChatResponse
+from rag.api.session_store import get_or_create_session, update_session
 
 
 logging.basicConfig(
@@ -87,8 +89,19 @@ def google_oauth_logout() -> dict:
 def chat(req: ChatRequest) -> ChatResponse:
     try:
         orch = get_orchestrator()
-        result = orch.run(req.message)
-        return ChatResponse(final_answer=result.final_answer, tool_trace=result.tool_trace)
+        session_id = req.session_id or uuid.uuid4().hex
+        session = get_or_create_session(session_id)
+
+        # Append this user turn and run the orchestrator with the session history.
+        session.messages.append({"role": "user", "content": req.message})
+        result, updated_messages = orch.run_with_messages(session.messages)
+        update_session(session_id, updated_messages)
+
+        return ChatResponse(
+            final_answer=result.final_answer,
+            tool_trace=result.tool_trace,
+            session_id=session_id,
+        )
     except Exception as exc:
         logging.exception("/chat failed")
         raise HTTPException(status_code=500, detail=str(exc))
