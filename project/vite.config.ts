@@ -14,6 +14,7 @@ export default defineConfig({
       '/health': 'http://127.0.0.1:8002',
       '/tools': 'http://127.0.0.1:8002',
       '/oauth': 'http://127.0.0.1:8002',
+      '/auth': 'http://127.0.0.1:8002',
     },
   },
 });

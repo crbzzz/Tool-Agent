@@ -8,7 +8,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 type MessageKind = 'text' | 'file';
 
-interface Message {
+export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
@@ -21,8 +21,10 @@ interface Message {
 interface ChatInterfaceProps {
   onMenuClick: () => void;
   resetCounter: number;
-  googleConnected: boolean;
-  onOpenSettings: () => void;
+  chatId: string | null;
+  initialMessages: Message[];
+  onChatIdChange: (chatId: string | null) => void;
+  onChatActivity?: () => void;
 }
 
 interface ChatResponse {
@@ -56,8 +58,10 @@ function extractAssistantAnswer(raw: string): string {
 export default function ChatInterface({
   onMenuClick,
   resetCounter,
-  googleConnected,
-  onOpenSettings,
+  chatId,
+  initialMessages,
+  onChatIdChange,
+  onChatActivity,
 }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -84,6 +88,18 @@ export default function ChatInterface({
     setIsLoading(false);
     setSessionId(null);
   }, [resetCounter]);
+
+  useEffect(() => {
+    setMessages(Array.isArray(initialMessages) ? initialMessages : []);
+    setInput('');
+    setIsLoading(false);
+  }, [initialMessages]);
+
+  useEffect(() => {
+    // Important: when the backend returns a new session_id on the first message,
+    // the parent updates chatId. We should not wipe the in-flight local messages.
+    setSessionId(chatId || null);
+  }, [chatId]);
 
   useEffect(() => {
     return () => {
@@ -182,10 +198,15 @@ export default function ChatInterface({
   const sendMessage = async (
     content: string,
     opts?: { displayContent?: string; kind?: MessageKind; fileName?: string }
-  ) => {
+  ): Promise<boolean> => {
     const text = (content || '').trim();
-    if (!googleConnected) return;
-    if (!text || isLoading) return;
+    if (!text || isLoading) return false;
+
+    const authed = await isAuthenticated();
+    if (!authed) {
+      showToast('Please sign in in Settings to send a message.');
+      return false;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -204,7 +225,7 @@ export default function ChatInterface({
       const r = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage.apiContent ?? userMessage.content, session_id: sessionId }),
+        body: JSON.stringify({ message: userMessage.apiContent ?? userMessage.content, session_id: sessionId || chatId }),
       });
 
       if (!r.ok) {
@@ -215,6 +236,7 @@ export default function ChatInterface({
       const data = (await r.json()) as ChatResponse;
       if (typeof data.session_id === 'string' && data.session_id.trim()) {
         setSessionId(data.session_id);
+        if (data.session_id !== sessionId) onChatIdChange(data.session_id);
       }
 
       const assistantMessage: Message = {
@@ -235,13 +257,18 @@ export default function ChatInterface({
     } finally {
       setIsLoading(false);
     }
+
+    return true;
   };
 
   const handleSend = async () => {
     if (!input.trim()) return;
     const current = input.trim();
-    setInput('');
-    await sendMessage(current);
+    const ok = await sendMessage(current);
+    if (ok) {
+      setInput('');
+      onChatActivity?.();
+    }
   };
 
   const uploadDocument = async (file: File) => {
@@ -264,11 +291,13 @@ export default function ChatInterface({
   };
 
   const attachFileAndSend = async (file: File) => {
-    if (!googleConnected) {
-      showToast('Connect Google to send a message...');
+    if (isLoading || isUploadingDocument) return;
+
+    const authed = await isAuthenticated();
+    if (!authed) {
+      showToast('Please sign in in Settings to send a message.');
       return;
     }
-    if (isLoading || isUploadingDocument) return;
 
     setIsUploadingDocument(true);
     try {
@@ -281,8 +310,11 @@ export default function ChatInterface({
         ? `Fichier ajouté: ${name}\nChemin: ${path}\n\nQuestion: ${question}`
         : `Fichier ajouté: ${name}\nChemin: ${path}\n\nTâche: extrait le texte (doc_extract_any) puis fais un résumé.`;
 
-      setInput('');
-      await sendMessage(msg, { kind: 'file', displayContent: '', fileName: name });
+      const ok = await sendMessage(msg, { kind: 'file', displayContent: '', fileName: name });
+      if (ok) {
+        setInput('');
+        onChatActivity?.();
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e));
     } finally {
@@ -304,7 +336,6 @@ export default function ChatInterface({
   };
 
   const startRecording = async () => {
-    if (!googleConnected) return;
     if (isLoading || isRecording || isTranscribing) return;
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -426,6 +457,18 @@ export default function ChatInterface({
     }
   };
 
+  const isAuthenticated = async (): Promise<boolean> => {
+    try {
+      const r = await fetch('/auth/status', { credentials: 'same-origin' });
+      if (!r.ok) return false;
+      const data = (await r.json()) as { signed_in?: unknown; authenticated?: unknown; user?: unknown };
+      const signedIn = Boolean(data?.signed_in ?? data?.authenticated);
+      return Boolean(signedIn && data?.user);
+    } catch {
+      return false;
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col h-screen">
       <header className="bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800 px-6 py-4 flex items-center justify-between">
@@ -443,6 +486,8 @@ export default function ChatInterface({
             <h1 className="text-xl font-semibold text-slate-800 dark:text-slate-100">Bart AI</h1>
           </div>
         </div>
+
+        <div className="flex items-center gap-2" />
       </header>
 
       <main
@@ -486,22 +531,6 @@ export default function ChatInterface({
             </div>
           </div>
         )}
-        {!googleConnected && (
-          <div className="max-w-3xl mx-auto mb-6">
-            <div className="bg-amber-50 border border-amber-200 text-amber-900 dark:bg-amber-950/30 dark:border-amber-900 dark:text-amber-100 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
-              <div className="text-sm">
-                Google connection is required to use chat.
-              </div>
-              <button
-                onClick={onOpenSettings}
-                className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-sm transition-colors"
-              >
-                Connect
-              </button>
-            </div>
-          </div>
-        )}
-
         {messages.length === 0 ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-center max-w-md">
@@ -557,6 +586,10 @@ export default function ChatInterface({
                           const match = /language-([\w-]+)/.exec(className || '');
                           const language = match?.[1] || '';
 
+                          const trimmed = codeText.trim();
+                          const isSingleLine = !codeText.includes('\n');
+                          const isTinyBlock = !inline && !language && isSingleLine && trimmed.length > 0 && trimmed.length <= 80;
+
                           if (inline) {
                             return (
                               <code
@@ -567,6 +600,21 @@ export default function ChatInterface({
                               </code>
                             );
                           }
+
+                          if (isTinyBlock) {
+                            return (
+                              <div className="my-1">
+                                <code
+                                  className="px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-[0.85em] whitespace-pre-wrap"
+                                  {...props}
+                                >
+                                  {trimmed}
+                                </code>
+                              </div>
+                            );
+                          }
+
+                          if (!trimmed) return null;
 
                           return (
                             <div className="my-2 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950">
@@ -660,13 +708,8 @@ export default function ChatInterface({
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder={
-                  googleConnected
-                    ? 'Type your message...'
-                    : 'Connect Google to send a message...'
-                }
+                placeholder={'Type your message...'}
                 rows={1}
-                disabled={!googleConnected}
                 className="w-full box-border px-4 py-3 pr-12 rounded-xl border border-slate-300 dark:border-slate-700 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:outline-none resize-none text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-900 placeholder-slate-400 transition-all disabled:bg-slate-50 dark:disabled:bg-slate-900/50 disabled:text-slate-500 disabled:cursor-not-allowed"
                 style={{ minHeight: '48px', maxHeight: '120px' }}
               />
@@ -687,7 +730,7 @@ export default function ChatInterface({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={!googleConnected || isLoading || isUploadingDocument}
+              disabled={isLoading || isUploadingDocument}
               className="w-12 h-12 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               title="Attach a file"
             >
@@ -696,7 +739,7 @@ export default function ChatInterface({
 
             <button
               onClick={() => (isRecording ? stopRecording() : startRecording())}
-              disabled={!googleConnected || isLoading || isTranscribing || isUploadingDocument}
+              disabled={isLoading || isTranscribing || isUploadingDocument}
               className="w-12 h-12 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               title={isRecording ? 'Stop recording' : 'Start voice input'}
             >
@@ -705,7 +748,7 @@ export default function ChatInterface({
 
             <button
               onClick={handleSend}
-              disabled={!googleConnected || !input.trim() || isLoading || isUploadingDocument}
+              disabled={!input.trim() || isLoading || isUploadingDocument}
               className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 hover:from-emerald-500 hover:to-teal-600 text-white rounded-xl flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md"
             >
               <Send className="w-5 h-5" />
