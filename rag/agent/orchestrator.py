@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from rag.agent.mistral_client import (
     MistralAgentsClient,
+    NormalizedToolCall,
     extract_assistant_message,
     extract_assistant_message_dict,
 )
@@ -19,6 +21,13 @@ from rag.agent.tool_registry import ToolRegistry, build_default_registry
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_STEPS = 3
+
+# Heuristics to avoid exceeding model context limits.
+# We approximate token usage by character count and keep a safe buffer.
+MAX_HISTORY_CHARS = int(os.getenv("MAX_HISTORY_CHARS", "200000"))
+MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "20000"))
+MAX_TOOL_LIST_ITEMS = int(os.getenv("MAX_TOOL_LIST_ITEMS", "200"))
+MAX_TOOL_TEXT_CHARS = int(os.getenv("MAX_TOOL_TEXT_CHARS", "8000"))
 
 
 @dataclass
@@ -57,14 +66,188 @@ class AgentOrchestrator:
 
         tool_trace: List[Dict[str, Any]] = []
 
+        def _sanitize_messages(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            """Best-effort sanitizer for message history sent to Mistral.
+
+            This prevents invalid requests such as:
+            - assistant message with both content and tool_calls missing/None
+            - tool message missing content/name
+            - None values that the API may treat as missing
+            """
+
+            cleaned: List[Dict[str, Any]] = []
+            for m in msgs or []:
+                if not isinstance(m, dict):
+                    continue
+                role = m.get("role")
+                if role not in {"system", "user", "assistant", "tool"}:
+                    continue
+
+                mm: Dict[str, Any] = {k: v for k, v in m.items() if v is not None}
+
+                # Ensure content is always a string for system/user/assistant/tool.
+                if role in {"system", "user", "assistant", "tool"}:
+                    content = mm.get("content", "")
+                    if content is None:
+                        content = ""
+                    if not isinstance(content, str):
+                        content = str(content)
+                    mm["content"] = content
+
+                if role == "assistant":
+                    # Drop tool_calls if it's None; keep if it exists and is non-empty.
+                    if mm.get("tool_calls") is None:
+                        mm.pop("tool_calls", None)
+                    # If assistant has neither content nor tool_calls, drop it.
+                    if not mm.get("content") and not mm.get("tool_calls"):
+                        continue
+
+                if role == "tool":
+                    # Tool messages must include a tool name.
+                    name = mm.get("name")
+                    if not isinstance(name, str) or not name.strip():
+                        continue
+                    mm["name"] = name
+                    # tool_call_id must not be None
+                    if mm.get("tool_call_id") is None:
+                        mm.pop("tool_call_id", None)
+
+                cleaned.append(mm)
+
+            return cleaned
+
+        def _trim_history_by_chars(msgs: List[Dict[str, Any]], max_chars: int) -> List[Dict[str, Any]]:
+            if max_chars <= 0:
+                return msgs
+            if not msgs:
+                return msgs
+
+            system_msg: Optional[Dict[str, Any]] = None
+            rest = msgs
+            if msgs and msgs[0].get("role") == "system":
+                system_msg = msgs[0]
+                rest = msgs[1:]
+
+            kept: List[Dict[str, Any]] = []
+            total = 0
+
+            # Keep newest messages first, then reverse to preserve order.
+            for m in reversed(rest):
+                content = m.get("content")
+                size = len(content) if isinstance(content, str) else len(str(content))
+                if kept and total + size > max_chars:
+                    break
+                kept.append(m)
+                total += size
+
+            kept.reverse()
+            if system_msg is not None:
+                return [system_msg, *kept]
+            return kept
+
+        def _shrink_tool_result(result: Dict[str, Any]) -> Dict[str, Any]:
+            """Shrink potentially huge tool results to keep prompts manageable."""
+
+            try:
+                out = dict(result)
+                data = out.get("data")
+                if isinstance(data, dict):
+                    # Common patterns: directory listings and search results.
+                    for list_key in ("items", "results"):
+                        lst = data.get(list_key)
+                        if isinstance(lst, list) and len(lst) > MAX_TOOL_LIST_ITEMS:
+                            data[list_key] = lst[:MAX_TOOL_LIST_ITEMS]
+                            data["truncated"] = True
+                            data["truncated_reason"] = f"{list_key} limited to {MAX_TOOL_LIST_ITEMS}"
+                    # Large text fields
+                    for text_key in ("content", "text", "body"):
+                        txt = data.get(text_key)
+                        if isinstance(txt, str) and len(txt) > MAX_TOOL_TEXT_CHARS:
+                            data[text_key] = txt[:MAX_TOOL_TEXT_CHARS]
+                            data["truncated"] = True
+                            data["truncated_reason"] = f"{text_key} limited to {MAX_TOOL_TEXT_CHARS} chars"
+                    out["data"] = data
+
+                tool_content = json.dumps(out, ensure_ascii=False)
+                if len(tool_content) <= MAX_TOOL_RESULT_CHARS:
+                    return out
+
+                # If still too large, fall back to a minimal preview.
+                preview = tool_content[:MAX_TOOL_RESULT_CHARS]
+                return {
+                    "ok": bool(result.get("ok")),
+                    "data": {
+                        "truncated": True,
+                        "truncated_reason": f"tool result limited to {MAX_TOOL_RESULT_CHARS} chars",
+                        "preview": preview,
+                    },
+                    "error": result.get("error"),
+                }
+            except Exception:
+                return {
+                    "ok": False,
+                    "data": {"truncated": True, "truncated_reason": "tool result shrink failed"},
+                    "error": "Tool result too large",
+                }
+
         if not messages:
             messages = [build_policy_message()]
 
+        # Sanitize any existing history (older sessions may contain None fields).
+        messages = _sanitize_messages(messages)
+
         # Ensure policy is present once at the beginning.
-        if messages[0].get("role") != "system":
+        if not messages or messages[0].get("role") != "system":
             messages = [build_policy_message(), *messages]
 
+        # Final sanitation after forcing policy.
+        messages = _sanitize_messages(messages)
+
+        # Prevent oversized prompts by trimming old history.
+        messages = _trim_history_by_chars(messages, MAX_HISTORY_CHARS)
+
         last_content: str = ""
+
+        def _tool_calls_from_content(content: str) -> List[NormalizedToolCall]:
+            """Fallback: accept tool calls embedded as pure JSON in assistant content.
+
+            Some agent configurations output tool calls as JSON text instead of using
+            the structured tool_calls field. We only accept *pure* JSON objects with
+            an expected shape.
+            """
+
+            if not isinstance(content, str):
+                return []
+            text = content.strip()
+            if not (text.startswith("{") and text.endswith("}")):
+                return []
+            try:
+                obj = json.loads(text)
+            except Exception:
+                return []
+
+            def _one(tc: Any) -> Optional[NormalizedToolCall]:
+                if not isinstance(tc, dict):
+                    return None
+                name = tc.get("name")
+                args = tc.get("arguments")
+                if not isinstance(name, str) or not name.strip():
+                    return None
+                if not isinstance(args, dict):
+                    return None
+                return NormalizedToolCall(name=name, arguments=args, call_id=None)
+
+            calls: List[NormalizedToolCall] = []
+            if isinstance(obj, dict) and isinstance(obj.get("tool_call"), dict):
+                one = _one(obj.get("tool_call"))
+                if one:
+                    calls.append(one)
+            if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list):
+                for tc in obj.get("tool_calls"):
+                    one = _one(tc)
+                    if one:
+                        calls.append(one)
+            return calls
 
         def _run_tools(tool_calls: Any) -> None:
             for call in tool_calls:
@@ -88,6 +271,10 @@ class AgentOrchestrator:
                 if isinstance(result, dict) and "timings_ms" not in result:
                     result["timings_ms"] = elapsed_ms
 
+                # Shrink tool outputs before adding them to message history.
+                if isinstance(result, dict):
+                    result = _shrink_tool_result(result)
+
                 tool_trace.append(
                     {
                         "name": name,
@@ -110,6 +297,12 @@ class AgentOrchestrator:
             assistant_msg = extract_assistant_message_dict(response)
             content, tool_calls = extract_assistant_message(response)
             last_content = content or last_content
+
+            # Fallback: if the SDK didn't surface tool_calls, attempt to parse tool calls from content.
+            if not tool_calls:
+                embedded = _tool_calls_from_content(content)
+                if embedded:
+                    tool_calls = embedded
 
             if not tool_calls:
                 # Preserve assistant response in the session history.

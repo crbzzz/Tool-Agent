@@ -28,6 +28,12 @@ pip install -e .
 uvicorn api.main:app --reload
 ```
 
+On Windows, to ensure you run with the virtualenv dependencies:
+
+```bash
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload
+```
+
 ## Desktop UI (optional)
 
 Start the API first, then run:
@@ -76,10 +82,68 @@ curl.exe -X POST http://127.0.0.1:8000/oauth/google/logout
 curl.exe -X POST http://127.0.0.1:8000/chat -H "Content-Type: application/json" --data-binary "{`"message`":`"Search my docs for onboarding notes and summarize`"}"
 ```
 
+### Sessions (memory)
+
+`/chat` supports an optional `session_id` to preserve context between calls.
+
+- If you omit it, the server returns a new `session_id`.
+- Send it back on subsequent calls to keep conversation history.
+
 Health check:
 
 ```bash
 curl http://127.0.0.1:8000/health
+```
+
+## Local filesystem access (Windows)
+
+This project includes **local filesystem tools** for listing/reading files. These are powerful and can be risky.
+
+### fs_* tools access mode
+
+The agent may call `fs_list_dir`, `fs_search_files`, `fs_read_file`, etc. Access is controlled by:
+
+```dotenv
+ACCESS_MODE=safe
+WORKSPACE_ROOT=./rag/data
+FS_DENYLIST=
+```
+
+- `ACCESS_MODE=safe`: only paths under `WORKSPACE_ROOT` are allowed.
+- `ACCESS_MODE=full_disk`: allows most paths, but blocks obvious secrets (e.g. `.ssh`, `.env`, keys) and anything in `FS_DENYLIST`.
+
+### Limited mode (recommended)
+
+By default, the agent can only access files under allowlisted roots. Configure in your `.env`:
+
+```dotenv
+LOCAL_FS_ALLOWED_ROOTS=C:\\Users\\<you>\\Documents;C:\\Users\\<you>\\Desktop
+LOCAL_FS_MAX_READ_BYTES=200000
+LOCAL_FS_ENABLE_DESTRUCTIVE=false
+```
+
+### Destructive actions (write/delete)
+
+Write/delete tools are **disabled by default**. To enable them:
+
+```dotenv
+LOCAL_FS_ENABLE_DESTRUCTIVE=true
+```
+
+They still require `user_confirmation=true` in tool arguments.
+
+### Admin mode (optional)
+
+If you need access to protected locations, you generally must **run the API as Administrator**.
+One pragmatic approach is to run two servers:
+
+- Normal server (limited): `http://127.0.0.1:8000`
+- Admin server (elevated): `http://127.0.0.1:8001`
+
+Start the admin server by opening **PowerShell as Administrator** and running:
+
+```bash
+uvicorn api.main:app --reload --port 8001
 ```
 
 ## Notes
