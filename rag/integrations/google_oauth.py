@@ -19,6 +19,7 @@ import base64
 import hashlib
 import urllib.parse
 import urllib.request
+import warnings
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
@@ -133,7 +134,7 @@ def oauth_prepare(return_to: str | None = None) -> Tuple[str, str]:
 
     auth_url, _state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
+        include_granted_scopes="false",
         prompt="consent",
         state=state,
     )
@@ -248,7 +249,19 @@ def load_credentials() -> Optional[Credentials]:
     if not token_path.exists():
         return None
 
-    creds = Credentials.from_authorized_user_file(str(token_path), scopes=_scopes())
+    try:
+        creds = Credentials.from_authorized_user_file(str(token_path), scopes=_scopes())
+    except ValueError as exc:
+        # Common when we changed requested scopes but a previous token file exists.
+        msg = str(exc)
+        if "Scope has changed" in msg or "scopes" in msg.lower():
+            logger.info("Stored Google token scopes no longer match; deleting token and requiring reconnect")
+            try:
+                token_path.unlink()
+            except Exception:
+                pass
+            return None
+        raise
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
@@ -284,7 +297,7 @@ def oauth_start_url(state: str) -> str:
         _state_store[state] = {"ts": time.time(), "verifier": verifier}
     auth_url, _state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
+        include_granted_scopes="false",
         prompt="consent",
         state=state,
     )
@@ -310,7 +323,10 @@ def oauth_exchange_code(
         flow.code_verifier = verifier
         try:
             # Pass code_verifier explicitly to guarantee it is sent.
-            flow.fetch_token(code=code, code_verifier=verifier)
+            # Some environments treat warnings as errors; ignore scope-change warnings.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r"Scope has changed.*")
+                flow.fetch_token(code=code, code_verifier=verifier)
         except Exception as exc:
             msg = str(exc)
             if "Missing code verifier" in msg or "code verifier" in msg or "invalid_grant" in msg:

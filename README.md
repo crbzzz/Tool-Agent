@@ -30,6 +30,28 @@ pip install -e .
 uvicorn api.main:app --reload --port 8002
 ```
 
+## Supabase Auth (accounts)
+
+This app can use Supabase Auth for:
+- Email/password signup + login
+- Google sign-in
+- Linking a Google identity to an existing account
+
+1) Create a Supabase project.
+
+2) Put these in your `.env` (see `.env.example`):
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+
+3) Configure redirect URLs in Supabase:
+
+In Supabase Dashboard → Authentication → URL Configuration, add the local callback:
+- `http://127.0.0.1:8002/auth/oauth/callback`
+
+Notes:
+- The desktop app opens Google auth in your system browser (recommended). The callback hits the local API.
+- Supabase Auth "Google" is separate from the Gmail/Drive OAuth used by tools.
+
 ## Desktop App (Bart AI)
 
 1) Build the UI once:
