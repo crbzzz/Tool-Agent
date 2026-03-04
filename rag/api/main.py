@@ -5,8 +5,14 @@ from __future__ import annotations
 import logging
 import uuid
 
+<<<<<<< Updated upstream
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
+=======
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, RedirectResponse
+>>>>>>> Stashed changes
 
 from dotenv import find_dotenv, load_dotenv
 
@@ -113,4 +119,36 @@ def chat(req: ChatRequest) -> ChatResponse:
         )
     except Exception as exc:
         logging.exception("/chat failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/voice/transcribe")
+async def voice_transcribe(
+    file: UploadFile = File(...),
+    language: str | None = Form(None),
+) -> dict:
+    """Transcribe uploaded audio with Mistral Voxtral.
+
+    Frontend sends a short recording as multipart/form-data.
+    Returns: { ok: true, text: "..." }
+    """
+
+    try:
+        audio_bytes = await file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        from rag.integrations.voxtral import transcribe_audio
+
+        text = transcribe_audio(
+            audio_bytes=audio_bytes,
+            filename=file.filename or "audio.webm",
+            content_type=file.content_type,
+            language=language,
+        )
+        return {"ok": True, "text": text}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("/voice/transcribe failed")
         raise HTTPException(status_code=500, detail=str(exc))
