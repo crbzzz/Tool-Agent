@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 
@@ -34,6 +35,20 @@ def _mount_ui_if_present(app: FastAPI) -> None:
     This keeps the project as an application: the desktop launcher opens this UI
     inside a local webview. The UI build output is not required for API-only usage.
     """
+
+    # rag/api/main.py -> rag/ -> repo root
+    repo_root = Path(__file__).resolve().parents[2]
+    dist_dir = repo_root / "project" / "dist"
+    index_html = dist_dir / "index.html"
+    if index_html.exists() and dist_dir.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(dist_dir), html=True), name="ui")
+
+
+_mount_ui_if_present(app)
+
+
+def _mount_ui_if_present(app: FastAPI) -> None:
+    """Mount the built desktop UI (Vite dist) if available."""
 
     # rag/api/main.py -> rag/ -> repo root
     repo_root = Path(__file__).resolve().parents[2]
@@ -199,4 +214,90 @@ def chat(req: ChatRequest) -> ChatResponse:
         )
     except Exception as exc:
         logging.exception("/chat failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/voice/transcribe")
+async def voice_transcribe(
+    file: UploadFile = File(...),
+    language: str | None = Form(None),
+) -> dict:
+    """Transcribe uploaded audio with Mistral Voxtral.
+
+    Returns: { ok: true, text: "..." }
+    """
+
+    no_audio_detail = (
+        "No audio detected. Please select an input device in Settings and try again."
+    )
+
+    try:
+        audio_bytes = await file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        logging.info(
+            "voice_transcribe: filename=%s content_type=%s bytes=%d language=%s",
+            file.filename,
+            file.content_type,
+            len(audio_bytes),
+            language,
+        )
+
+        min_bytes = int(os.environ.get("BART_AI_MIN_AUDIO_BYTES", "2048"))
+        if len(audio_bytes) < min_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Audio too short/quiet (got {len(audio_bytes)} bytes; min {min_bytes}). "
+                    "Check microphone permission, selected input device, and record a bit longer."
+                ),
+            )
+
+        if language is None:
+            language = (os.environ.get("MISTRAL_VOXTRAL_LANGUAGE") or "").strip() or None
+
+        disable_vad = (os.environ.get("BART_AI_DISABLE_VAD") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not disable_vad:
+            from rag.integrations.audio_vad import detect_speech
+
+            vad = detect_speech(
+                audio_bytes=audio_bytes,
+                filename=file.filename or "audio.webm",
+                content_type=file.content_type,
+            )
+            logging.info(
+                "voice_transcribe: vad has_speech=%s reason=%s dbfs=%s analyzed_s=%s speech_ms=%s ratio=%s",
+                vad.has_speech,
+                vad.reason,
+                (None if vad.dbfs is None else round(vad.dbfs, 1)),
+                (None if vad.analyzed_seconds is None else round(vad.analyzed_seconds, 2)),
+                vad.speech_ms,
+                (None if vad.speech_ratio is None else round(vad.speech_ratio, 3)),
+            )
+            if not vad.has_speech:
+                raise HTTPException(
+                    status_code=422,
+                    detail=no_audio_detail,
+                )
+
+        from rag.integrations.voxtral import transcribe_audio
+
+        text = transcribe_audio(
+            audio_bytes=audio_bytes,
+            filename=file.filename or "audio.webm",
+            content_type=file.content_type,
+            language=language,
+        )
+        if not (text or "").strip():
+            raise HTTPException(status_code=422, detail=no_audio_detail)
+        return {"ok": True, "text": text}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("/voice/transcribe failed")
         raise HTTPException(status_code=500, detail=str(exc))
