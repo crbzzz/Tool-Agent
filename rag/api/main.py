@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 
@@ -147,6 +148,57 @@ async def voice_transcribe(
         if not audio_bytes:
             raise HTTPException(status_code=400, detail="Empty audio file")
 
+        logging.info(
+            "voice_transcribe: filename=%s content_type=%s bytes=%d language=%s",
+            file.filename,
+            file.content_type,
+            len(audio_bytes),
+            language,
+        )
+
+        min_bytes = int(os.environ.get("BART_AI_MIN_AUDIO_BYTES", "2048"))
+        if len(audio_bytes) < min_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Audio too short/quiet (got {len(audio_bytes)} bytes; min {min_bytes}). "
+                    "Check microphone permission, selected input device, and record a bit longer."
+                ),
+            )
+
+        if language is None:
+            language = (os.environ.get("MISTRAL_VOXTRAL_LANGUAGE") or "").strip() or None
+
+        from rag.integrations.audio_vad import detect_speech
+
+        vad = detect_speech(
+            audio_bytes=audio_bytes,
+            filename=file.filename or "audio.webm",
+            content_type=file.content_type,
+        )
+        logging.info(
+            "voice_transcribe: vad has_speech=%s reason=%s dbfs=%s analyzed_s=%s speech_ms=%s ratio=%s",
+            vad.has_speech,
+            vad.reason,
+            (None if vad.dbfs is None else round(vad.dbfs, 1)),
+            (None if vad.analyzed_seconds is None else round(vad.analyzed_seconds, 2)),
+            vad.speech_ms,
+            (None if vad.speech_ratio is None else round(vad.speech_ratio, 3)),
+        )
+        if not vad.has_speech:
+            extra = ""
+            if vad.dbfs is not None and vad.analyzed_seconds is not None:
+                extra += f" (energy={vad.dbfs:.1f} dBFS over {vad.analyzed_seconds:.2f}s)"
+            if vad.speech_ms is not None and vad.speech_ratio is not None:
+                extra += f" (speech={vad.speech_ms}ms ratio={vad.speech_ratio:.2f})"
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "No speech detected in audio." + extra + " "
+                    "Record longer, speak closer to the mic, and verify the selected input device."
+                ),
+            )
+
         from rag.integrations.voxtral import transcribe_audio
 
         text = transcribe_audio(
@@ -155,6 +207,8 @@ async def voice_transcribe(
             content_type=file.content_type,
             language=language,
         )
+        if not (text or "").strip():
+            raise HTTPException(status_code=422, detail="No speech detected in audio.")
         return {"ok": True, "text": text}
     except HTTPException:
         raise

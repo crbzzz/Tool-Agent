@@ -4,7 +4,7 @@ The UI records short audio clips (webm/ogg) and uploads them to the backend.
 The backend forwards them to Mistral's transcription API (Voxtral).
 
 Model selection:
-- `MISTRAL_VOXTRAL_MODEL` (default: "voxtral-small")
+- `MISTRAL_VOXTRAL_MODEL` (default: "voxtral-mini-transcribe-2507")
 - If the configured model fails (typo / unavailable), we retry with safe fallbacks.
 """
 
@@ -33,8 +33,9 @@ def _candidate_models(configured: str | None) -> list[str]:
     if configured and "voxstral" in configured:
         add(configured.replace("voxstral", "voxtral"))
 
-    # Known default.
-    add("voxtral-small")
+    # Transcribe-capable defaults.
+    add("voxtral-mini-transcribe-2507")
+    add("voxtral-mini-latest")
 
     return candidates
 
@@ -50,7 +51,9 @@ def transcribe_audio(
     if not api_key:
         raise RuntimeError("MISTRAL_API_KEY is not set")
 
-    configured_model = os.environ.get("MISTRAL_VOXTRAL_MODEL", "voxtral-small")
+    configured_model = os.environ.get(
+        "MISTRAL_VOXTRAL_MODEL", "voxtral-mini-transcribe-2507"
+    )
     models = _candidate_models(configured_model)
 
     try:
@@ -62,17 +65,29 @@ def transcribe_audio(
     client = Mistral(api_key=api_key)
     file = File(fileName=filename, content=audio_bytes, content_type=content_type)
 
+    temperature_env = (os.environ.get("MISTRAL_VOXTRAL_TEMPERATURE") or "").strip()
+    temperature: float | None
+    if temperature_env == "":
+        temperature = 0.0
+    else:
+        try:
+            temperature = float(temperature_env)
+        except ValueError:
+            temperature = 0.0
+
     last_exc: Exception | None = None
     for model in models:
         try:
             kwargs = {}
             if language:
                 kwargs["language"] = language
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             resp = client.audio.transcriptions.complete(model=model, file=file, **kwargs)
 
             # SDK responses are pydantic models; best-effort extraction.
             text = getattr(resp, "text", None)
-            if isinstance(text, str) and text.strip():
+            if isinstance(text, str):
                 return text
 
             dump = getattr(resp, "model_dump", None)
@@ -82,11 +97,6 @@ def transcribe_audio(
                     maybe_text = data.get("text") or data.get("transcription")
                     if isinstance(maybe_text, str) and maybe_text.strip():
                         return maybe_text
-
-            # Last resort.
-            rendered = str(resp).strip()
-            if rendered:
-                return rendered
         except Exception as exc:  # pragma: no cover
             last_exc = exc
             continue
