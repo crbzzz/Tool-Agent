@@ -21,7 +21,10 @@ def search_documents(args: Dict[str, Any]) -> Dict[str, Any]:
     This skeleton intentionally avoids assuming a specific index/docstore format.
     """
 
+    # Remote agent configurations sometimes use `question` instead of `query`.
     query = args.get("query")
+    if query is None:
+        query = args.get("question")
     top_k = args.get("top_k", 5)
     if not isinstance(query, str) or not query.strip():
         return {"ok": False, "data": None, "error": "Missing or invalid `query`"}

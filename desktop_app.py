@@ -20,7 +20,7 @@ from tkinter import ttk
 import requests
 
 
-DEFAULT_API_URL = "http://127.0.0.1:8000"
+DEFAULT_API_URL = "http://127.0.0.1:8002"
 
 
 class DesktopApp:

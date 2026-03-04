@@ -31,6 +31,15 @@ def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/tools")
+def tools() -> dict:
+    """Debug endpoint: list tool names available to the orchestrator."""
+
+    orch = get_orchestrator()
+    names = sorted(list(getattr(orch.registry, "tools", {}).keys()))
+    return {"ok": True, "tools": names}
+
+
 @app.get("/oauth/google/status")
 def google_oauth_status() -> dict:
     from rag.integrations.google_oauth import is_connected
