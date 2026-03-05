@@ -35,6 +35,15 @@ load_dotenv(find_dotenv(".env"), override=False)
 app = FastAPI(title="Bart AI API", version="0.1.0")
 
 
+# Observability endpoints
+try:
+    from rag.api.observability import router as observability_router
+
+    app.include_router(observability_router)
+except Exception:
+    logging.exception("Failed to mount observability router")
+
+
 class _ClientIdCookieMiddleware(BaseHTTPMiddleware):
     """Ensure the embedded UI keeps a stable client_id cookie.
 
@@ -890,7 +899,7 @@ def chat(req: ChatRequest, request: Request) -> ChatResponse:
 
         # Append this user turn and run the orchestrator with the session history.
         session.messages.append({"role": "user", "content": req.message})
-        result, updated_messages = orch.run_with_messages(session.messages)
+        result, updated_messages = orch.run_with_messages(session.messages, user_id=user_id)
         update_session(session_id, updated_messages)
 
         # Persist this turn (best-effort). The session_id doubles as chat_id.
@@ -944,7 +953,9 @@ def chat(req: ChatRequest, request: Request) -> ChatResponse:
             logging.exception("Failed to persist chat turn")
 
         return ChatResponse(
-            final_answer=result.final_answer,
+            ok=True,
+            run_id=result.run_id,
+            result=result.normalized_response,
             tool_trace=result.tool_trace,
             session_id=session_id,
         )

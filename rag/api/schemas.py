@@ -16,13 +16,20 @@ class ChatRequest(BaseModel):
 
 
 class ToolTraceItem(BaseModel):
-    name: str
-    arguments: Dict[str, Any]
+    step_index: int
+    tool_name: str
+    args_summary: str
+    started_at_iso: str
+    finished_at_iso: str
+    duration_ms: int
     ok: bool
     error: Optional[str] = None
+    affected_items_count: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
-    final_answer: str = Field(..., description="The final answer to the user's message.")
+    ok: bool = True
+    run_id: str
+    result: Dict[str, Any]
     tool_trace: List[ToolTraceItem]
     session_id: str | None = None

@@ -36,8 +36,17 @@ interface ChatInterfaceProps {
 }
 
 interface ChatResponse {
-  final_answer: string;
-  tool_trace: Array<{ name: string; ok: boolean; error?: string | null }>;
+  ok: boolean;
+  run_id: string;
+  result: {
+    type?: 'text' | 'code' | 'mixed' | 'tool_call' | string;
+    answer?: string;
+    grounded?: boolean | null;
+    blocks?: Array<{ type?: string; content?: string; language?: string; filename?: string }>;
+    sources?: unknown[];
+    next_step?: string;
+  };
+  tool_trace: Array<{ tool_name: string; ok: boolean; error?: string | null }>;
   session_id?: string | null;
 }
 
@@ -255,7 +264,7 @@ export default function ChatInterface({
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: extractAssistantAnswer(data.final_answer || ''),
+        content: extractAssistantAnswer(data?.result?.answer || ''),
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
