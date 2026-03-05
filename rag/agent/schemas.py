@@ -76,9 +76,57 @@ SEND_EMAIL_PARAMS_SCHEMA: Dict[str, Any] = {
         "to": {"type": "array", "items": {"type": "string", "minLength": 3}, "minItems": 1},
         "subject": {"type": "string"},
         "body": {"type": "string"},
+        "attachment_file_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "user_confirmation": {"type": "boolean", "default": False},
     },
     "required": ["to", "subject", "body", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+SEND_EMAIL_WITH_ATTACHMENTS_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "to": {"type": "array", "items": {"type": "string", "minLength": 3}, "minItems": 1},
+        "subject": {"type": "string"},
+        "body": {"type": "string"},
+        "attachment_file_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+        },
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["to", "subject", "body", "attachment_file_ids", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+UPLOAD_LIST_FILES_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+UPLOAD_GET_FILE_INFO_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {"file_id": {"type": "string", "minLength": 1}},
+    "required": ["file_id"],
+    "additionalProperties": False,
+}
+
+
+UPLOAD_DELETE_FILE_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "file_id": {"type": "string", "minLength": 1},
+        "user_confirmation": {"type": "boolean", "default": False},
+    },
+    "required": ["file_id", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -361,6 +409,10 @@ TOOL_PARAM_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "list_drive_files": LIST_DRIVE_FILES_PARAMS_SCHEMA,
     "get_drive_file": GET_DRIVE_FILE_PARAMS_SCHEMA,
     "send_email": SEND_EMAIL_PARAMS_SCHEMA,
+    "send_email_with_attachments": SEND_EMAIL_WITH_ATTACHMENTS_PARAMS_SCHEMA,
+    "upload_list_files": UPLOAD_LIST_FILES_PARAMS_SCHEMA,
+    "upload_get_file_info": UPLOAD_GET_FILE_INFO_PARAMS_SCHEMA,
+    "upload_delete_file": UPLOAD_DELETE_FILE_PARAMS_SCHEMA,
     "local_list_dir": LOCAL_LIST_DIR_PARAMS_SCHEMA,
     "local_read_text": LOCAL_READ_TEXT_PARAMS_SCHEMA,
     "local_write_text": LOCAL_WRITE_TEXT_PARAMS_SCHEMA,
@@ -498,6 +550,38 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "name": "send_email",
             "description": "Send an email (stub; requires explicit user_confirmation=true).",
             "parameters": SEND_EMAIL_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email_with_attachments",
+            "description": "Send an email with uploaded attachments (requires explicit user_confirmation=true).",
+            "parameters": SEND_EMAIL_WITH_ATTACHMENTS_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upload_list_files",
+            "description": "List uploaded files available for attachment by file_id.",
+            "parameters": UPLOAD_LIST_FILES_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upload_get_file_info",
+            "description": "Get metadata about an uploaded file by file_id.",
+            "parameters": UPLOAD_GET_FILE_INFO_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upload_delete_file",
+            "description": "Delete an uploaded file by file_id (requires explicit user_confirmation=true).",
+            "parameters": UPLOAD_DELETE_FILE_PARAMS_SCHEMA,
         },
     },
     {

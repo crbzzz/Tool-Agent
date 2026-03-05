@@ -114,9 +114,11 @@ class AgentOrchestrator:
                     if not isinstance(name, str) or not name.strip():
                         continue
                     mm["name"] = name
-                    # tool_call_id must not be None
-                    if mm.get("tool_call_id") is None:
-                        mm.pop("tool_call_id", None)
+                    # tool_call_id is required for tool-calling APIs.
+                    tci = mm.get("tool_call_id")
+                    if not isinstance(tci, str) or not tci.strip():
+                        continue
+                    mm["tool_call_id"] = tci
 
                 cleaned.append(mm)
 

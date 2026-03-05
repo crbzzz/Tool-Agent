@@ -27,7 +27,8 @@ def build_default_registry() -> ToolRegistry:
         doc_read_text,
     )
     from rag.tools.drive import get_drive_file, list_drive_files
-    from rag.tools.email_send import send_email
+    from rag.tools.email_send import send_email, send_email_with_attachments
+    from rag.tools.uploads import upload_delete_file, upload_get_file_info, upload_list_files
     from rag.tools.fs import (
         fs_delete_path,
         fs_list_dir,
@@ -72,6 +73,10 @@ def build_default_registry() -> ToolRegistry:
             "list_drive_files": list_drive_files,
             "get_drive_file": get_drive_file,
             "send_email": send_email,
+            "send_email_with_attachments": send_email_with_attachments,
+            "upload_list_files": upload_list_files,
+            "upload_get_file_info": upload_get_file_info,
+            "upload_delete_file": upload_delete_file,
             "local_list_dir": local_list_dir,
             "local_read_text": local_read_text,
             "local_search_files": local_search_files,

@@ -64,7 +64,18 @@ def _to_dict_maybe(obj: Any) -> Any:
             pass
     # Fallback: attempt attribute extraction for common fields
     out: Dict[str, Any] = {}
-    for key in ("id", "type", "name", "arguments", "function", "tool_calls", "content", "role"):
+    for key in (
+        "id",
+        "tool_call_id",
+        "call_id",
+        "type",
+        "name",
+        "arguments",
+        "function",
+        "tool_calls",
+        "content",
+        "role",
+    ):
         val = getattr(obj, key, None)
         if val is not None:
             out[key] = _to_dict_maybe(val)
@@ -91,7 +102,8 @@ def normalize_tool_calls(tool_calls: Any) -> List[NormalizedToolCall]:
         tool_calls = [tool_calls]
 
     for call in tool_calls:
-        call_id = _get(call, "id", None)
+        # SDK shapes vary: some use `id`, others use `tool_call_id` or `call_id`.
+        call_id = _get(call, "id", None) or _get(call, "tool_call_id", None) or _get(call, "call_id", None)
         fn = _get(call, "function", None) or call
         name = _get(fn, "name", None) or _get(call, "name", None)
         args = _get(fn, "arguments", None) or _get(call, "arguments", None)

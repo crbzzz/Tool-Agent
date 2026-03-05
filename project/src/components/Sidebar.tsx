@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X, Plus, MessageSquare, Settings, History, Trash2, Pencil } from 'lucide-react';
+import { X, Plus, MessageSquare, Settings, BarChart3, Trash2, Pencil } from 'lucide-react';
 
 export interface ChatSummary {
   id: string;
@@ -17,8 +17,9 @@ interface SidebarProps {
   onOpenChat: (chatId: string) => void;
   onDeleteChat: (chatId: string) => void;
   onRenameChat: (chatId: string, title: string) => void;
+  onOpenUsage: () => void;
   onOpenSettings: () => void;
-  activeView: 'chat' | 'settings';
+  activeView: 'chat' | 'settings' | 'usage';
 }
 
 export default function Sidebar({
@@ -30,6 +31,7 @@ export default function Sidebar({
   onOpenChat,
   onDeleteChat,
   onRenameChat,
+  onOpenUsage,
   onOpenSettings,
   activeView,
 }: SidebarProps) {
@@ -124,9 +126,19 @@ export default function Sidebar({
         </nav>
 
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-1">
-          <button className="w-full flex items-center gap-3 px-4 py-3 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors duration-200">
-            <History className="w-5 h-5" />
-            <span className="text-sm">History</span>
+          <button
+            onClick={() => {
+              onOpenUsage();
+              onClose();
+            }}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors duration-200 ${
+              activeView === 'usage'
+                ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100'
+                : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <BarChart3 className="w-5 h-5" />
+            <span className="text-sm">Utilisation</span>
           </button>
           <button
             onClick={() => {

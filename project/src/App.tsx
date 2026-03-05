@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import ChatInterface, { Message } from './components/ChatInterface';
 import Sidebar, { ChatSummary } from './components/Sidebar';
 import SettingsPage from './components/SettingsPage';
+import UsagePage from './components/UsagePage';
 
-type View = 'chat' | 'settings';
+type View = 'chat' | 'settings' | 'usage';
 
 type Theme = 'light' | 'dark';
 
@@ -184,6 +185,10 @@ function App() {
       );
     }
 
+    if (view === 'usage') {
+      return <UsagePage onBackToChat={() => setView('chat')} />;
+    }
+
     return (
       <ChatInterface
         onMenuClick={() => setIsSidebarOpen(true)}
@@ -210,6 +215,10 @@ function App() {
         onOpenChat={(id) => openChat(id)}
         onDeleteChat={(id) => deleteChat(id)}
         onRenameChat={(id, title) => renameChat(id, title)}
+        onOpenUsage={() => {
+          setView('usage');
+          setIsSidebarOpen(false);
+        }}
         onOpenSettings={() => {
           setView('settings');
           setIsSidebarOpen(false);
