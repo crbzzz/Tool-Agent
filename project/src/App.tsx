@@ -3,8 +3,9 @@ import ChatInterface, { Message } from './components/ChatInterface';
 import Sidebar, { ChatSummary } from './components/Sidebar';
 import SettingsPage from './components/SettingsPage';
 import UsagePage from './components/UsagePage';
+import AppsPage from './components/AppsPage';
 
-type View = 'chat' | 'settings' | 'usage';
+type View = 'chat' | 'settings' | 'usage' | 'apps';
 
 type Theme = 'light' | 'dark';
 
@@ -189,9 +190,14 @@ function App() {
       return <UsagePage onBackToChat={() => setView('chat')} />;
     }
 
+    if (view === 'apps') {
+      return <AppsPage onBackToChat={() => setView('chat')} />;
+    }
+
     return (
       <ChatInterface
         onMenuClick={() => setIsSidebarOpen(true)}
+        onOpenApps={() => setView('apps')}
         resetCounter={resetCounter}
         chatId={activeChatId}
         initialMessages={activeChatMessages}

@@ -27,6 +27,7 @@ export interface Message {
 
 interface ChatInterfaceProps {
   onMenuClick: () => void;
+  onOpenApps: () => void;
   resetCounter: number;
   chatId: string | null;
   initialMessages: Message[];
@@ -43,7 +44,7 @@ interface ChatResponse {
 function extractAssistantAnswer(raw: string): string {
   const text = (raw ?? '').toString();
   const trimmed = text.trim();
-  if (!trimmed) return '';
+  if (!trimmed) return "I couldn't generate a response. Please try again.";
 
   // If the agent returns a JSON payload (e.g. {"answer":..., "sources":...}),
   // only display the human-readable `answer` field.
@@ -52,18 +53,22 @@ function extractAssistantAnswer(raw: string): string {
       const parsed = JSON.parse(trimmed) as unknown;
       if (parsed && typeof parsed === 'object') {
         const maybeAnswer = (parsed as { answer?: unknown }).answer;
-        if (typeof maybeAnswer === 'string') return maybeAnswer;
+        if (typeof maybeAnswer === 'string') {
+          const a = maybeAnswer.trim();
+          return a || "I couldn't generate a response. Please try again.";
+        }
       }
     } catch {
       // Not JSON; fall through.
     }
   }
 
-  return text;
+  return trimmed || "I couldn't generate a response. Please try again.";
 }
 
 export default function ChatInterface({
   onMenuClick,
+  onOpenApps,
   resetCounter,
   chatId,
   initialMessages,
@@ -514,7 +519,14 @@ export default function ChatInterface({
           </div>
         </div>
 
-        <div className="flex items-center gap-2" />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onOpenApps}
+            className="px-3 py-2 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900 hover:opacity-95 transition-opacity"
+          >
+            Apps
+          </button>
+        </div>
       </header>
 
       <main

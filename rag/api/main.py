@@ -24,11 +24,10 @@ from rag.api.deps import get_orchestrator
 from rag.api.schemas import ChatRequest, ChatResponse
 from rag.api.session_store import get_or_create_session, update_session
 
+from rag.logging_setup import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-)
+
+configure_logging()
 
 # Load local .env (if present) for all endpoints, including OAuth routes.
 load_dotenv(find_dotenv(".env"), override=False)

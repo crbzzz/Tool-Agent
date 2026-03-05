@@ -13,6 +13,7 @@ Run:
 from __future__ import annotations
 
 import os
+import platform
 import socket
 import threading
 import time
@@ -45,6 +46,20 @@ def _wait_for_health(port: int, timeout_s: float = 10.0) -> bool:
 
 def main() -> None:
     load_dotenv(find_dotenv(".env"), override=False)
+
+    # Filesystem tool access defaults.
+    # - ACCESS_MODE=safe restricts access to WORKSPACE_ROOT (default ./rag/data).
+    # - ACCESS_MODE=full_disk allows reading from the full machine (with a small denylist).
+    # Users can override any of these via environment variables or .env.
+    os.environ.setdefault("ACCESS_MODE", "full_disk")
+    if platform.system().lower().startswith("win"):
+        drive = (os.environ.get("SystemDrive") or "C:").rstrip("\\/")
+        root = f"{drive}\\"
+        os.environ.setdefault("WORKSPACE_ROOT", root)
+        os.environ.setdefault("LOCAL_FS_ALLOWED_ROOTS", root)
+    else:
+        os.environ.setdefault("WORKSPACE_ROOT", "/")
+        os.environ.setdefault("LOCAL_FS_ALLOWED_ROOTS", "/")
 
     repo_root = Path(__file__).resolve().parent
     ui_index = repo_root / "project" / "dist" / "index.html"

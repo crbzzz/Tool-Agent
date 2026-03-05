@@ -19,7 +19,7 @@ interface SidebarProps {
   onRenameChat: (chatId: string, title: string) => void;
   onOpenUsage: () => void;
   onOpenSettings: () => void;
-  activeView: 'chat' | 'settings' | 'usage';
+  activeView: 'chat' | 'settings' | 'usage' | 'apps';
 }
 
 export default function Sidebar({

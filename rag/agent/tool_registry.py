@@ -18,6 +18,17 @@ class ToolRegistry:
 
 
 def build_default_registry() -> ToolRegistry:
+    from rag.tools.apps import (
+        app_auto_backup_folder,
+        app_bulk_rename_files,
+        app_clean_temp_files,
+        app_email_pdf_pipeline,
+        app_find_large_files,
+        app_organize_directory_by_type,
+        app_sync_local_folder_to_drive,
+        app_upload_files_to_drive,
+        app_weekly_mail_digest,
+    )
     from rag.tools.documents import (
         doc_detect_type,
         doc_extract_any,
@@ -26,7 +37,18 @@ def build_default_registry() -> ToolRegistry:
         doc_ocr_image,
         doc_read_text,
     )
-    from rag.tools.drive import get_drive_file, list_drive_files
+    from rag.tools.drive import (
+        drive_create_folder,
+        drive_delete_folder,
+        drive_ensure_folder,
+        drive_list_folders,
+        drive_move_folder,
+        drive_rename_folder,
+        drive_upload_local_file,
+        drive_upload_file,
+        get_drive_file,
+        list_drive_files,
+    )
     from rag.tools.email_send import send_email, send_email_with_attachments
     from rag.tools.uploads import upload_delete_file, upload_get_file_info, upload_list_files
     from rag.tools.fs import (
@@ -36,9 +58,18 @@ def build_default_registry() -> ToolRegistry:
         fs_move_path,
         fs_read_file,
         fs_search_files,
+        fs_search_recursive,
         fs_write_file,
     )
-    from rag.tools.gmail import get_email, list_emails
+    from rag.tools.gmail import (
+        get_email,
+        gmail_apply_label,
+        gmail_download_attachment,
+        gmail_list_attachments,
+        gmail_trash_message,
+        list_emails,
+    )
+    from rag.tools.app_state import app_state_get, app_state_set
     from rag.tools.local_fs import (
         local_delete_path,
         local_list_dir,
@@ -70,10 +101,34 @@ def build_default_registry() -> ToolRegistry:
             "search_web": search_web,
             "list_emails": list_emails,
             "get_email": get_email,
+            "gmail_list_attachments": gmail_list_attachments,
+            "gmail_download_attachment": gmail_download_attachment,
+            "gmail_apply_label": gmail_apply_label,
+            "gmail_trash_message": gmail_trash_message,
             "list_drive_files": list_drive_files,
             "get_drive_file": get_drive_file,
+            "drive_ensure_folder": drive_ensure_folder,
+            "drive_upload_file": drive_upload_file,
+            "drive_upload_local_file": drive_upload_local_file,
+            "drive_list_folders": drive_list_folders,
+            "drive_create_folder": drive_create_folder,
+            "drive_rename_folder": drive_rename_folder,
+            "drive_move_folder": drive_move_folder,
+            "drive_delete_folder": drive_delete_folder,
             "send_email": send_email,
             "send_email_with_attachments": send_email_with_attachments,
+            "app_state_get": app_state_get,
+            "app_state_set": app_state_set,
+            # Macro app_* tools
+            "app_upload_files_to_drive": app_upload_files_to_drive,
+            "app_sync_local_folder_to_drive": app_sync_local_folder_to_drive,
+            "app_organize_directory_by_type": app_organize_directory_by_type,
+            "app_email_pdf_pipeline": app_email_pdf_pipeline,
+            "app_weekly_mail_digest": app_weekly_mail_digest,
+            "app_bulk_rename_files": app_bulk_rename_files,
+            "app_auto_backup_folder": app_auto_backup_folder,
+            "app_find_large_files": app_find_large_files,
+            "app_clean_temp_files": app_clean_temp_files,
             "upload_list_files": upload_list_files,
             "upload_get_file_info": upload_get_file_info,
             "upload_delete_file": upload_delete_file,
@@ -85,6 +140,7 @@ def build_default_registry() -> ToolRegistry:
             # fs_* tools (exact names expected by agent tool calls)
             "fs_list_dir": fs_list_dir,
             "fs_search_files": fs_search_files,
+            "fs_search_recursive": fs_search_recursive,
             "fs_read_file": fs_read_file,
             "fs_write_file": fs_write_file,
             "fs_delete_path": fs_delete_path,
