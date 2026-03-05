@@ -103,8 +103,9 @@ GMAIL_APPLY_LABEL_PARAMS_SCHEMA: Dict[str, Any] = {
     "properties": {
         "message_id": {"type": "string"},
         "label_name": {"type": "string"},
+        "user_confirmation": {"type": "boolean", "enum": [True]},
     },
-    "required": ["message_id", "label_name"],
+    "required": ["message_id", "label_name", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -148,6 +149,11 @@ DRIVE_ENSURE_FOLDER_PARAMS_SCHEMA: Dict[str, Any] = {
             "type": "string",
             "description": "Optional parent folder id. If omitted, uses Drive root.",
         },
+        "user_confirmation": {
+            "type": "boolean",
+            "enum": [True],
+            "description": "Required only if a new folder must be created.",
+        },
     },
     "required": ["folder_name"],
     "additionalProperties": False,
@@ -173,8 +179,9 @@ DRIVE_UPLOAD_FILE_PARAMS_SCHEMA: Dict[str, Any] = {
             "type": "string",
             "description": "Base64-encoded file content.",
         },
+        "user_confirmation": {"type": "boolean", "enum": [True]},
     },
-    "required": ["folder_id", "filename", "mime_type", "content_base64"],
+    "required": ["folder_id", "filename", "mime_type", "content_base64", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -186,8 +193,9 @@ DRIVE_UPLOAD_LOCAL_FILE_PARAMS_SCHEMA: Dict[str, Any] = {
         "folder_id": {"type": "string", "minLength": 1, "description": "Destination Drive folder ID."},
         "filename": {"type": "string", "description": "Optional filename override."},
         "mime_type": {"type": "string", "description": "Optional MIME type override."},
+        "user_confirmation": {"type": "boolean", "enum": [True]},
     },
-    "required": ["local_path", "folder_id"],
+    "required": ["local_path", "folder_id", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -218,8 +226,9 @@ DRIVE_CREATE_FOLDER_PARAMS_SCHEMA: Dict[str, Any] = {
             "type": "string",
             "description": "Optional parent folder id. If omitted, uses Drive root.",
         },
+        "user_confirmation": {"type": "boolean", "enum": [True]},
     },
-    "required": ["folder_name"],
+    "required": ["folder_name", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -229,8 +238,9 @@ DRIVE_RENAME_FOLDER_PARAMS_SCHEMA: Dict[str, Any] = {
     "properties": {
         "folder_id": {"type": "string", "minLength": 1},
         "new_name": {"type": "string", "minLength": 1},
+        "user_confirmation": {"type": "boolean", "enum": [True]},
     },
-    "required": ["folder_id", "new_name"],
+    "required": ["folder_id", "new_name", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -241,8 +251,9 @@ DRIVE_MOVE_FOLDER_PARAMS_SCHEMA: Dict[str, Any] = {
         "folder_id": {"type": "string", "minLength": 1},
         "new_parent_folder_id": {"type": "string", "minLength": 1},
         "remove_other_parents": {"type": "boolean", "default": True},
+        "user_confirmation": {"type": "boolean", "enum": [True]},
     },
-    "required": ["folder_id", "new_parent_folder_id"],
+    "required": ["folder_id", "new_parent_folder_id", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -254,6 +265,25 @@ DRIVE_DELETE_FOLDER_PARAMS_SCHEMA: Dict[str, Any] = {
         "user_confirmation": {"type": "boolean", "enum": [True]},
     },
     "required": ["folder_id", "user_confirmation"],
+    "additionalProperties": False,
+}
+
+
+POLICY_GET_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+POLICY_SET_MODE_PARAMS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string", "enum": ["safe", "full_disk"]},
+        "user_confirmation": {"type": "boolean", "enum": [True]},
+    },
+    "required": ["mode", "user_confirmation"],
     "additionalProperties": False,
 }
 
@@ -906,6 +936,8 @@ TOOL_PARAM_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "app_auto_backup_folder": APP_AUTO_BACKUP_FOLDER_PARAMS_SCHEMA,
     "app_find_large_files": APP_FIND_LARGE_FILES_PARAMS_SCHEMA,
     "app_clean_temp_files": APP_CLEAN_TEMP_FILES_PARAMS_SCHEMA,
+    "policy_get": POLICY_GET_PARAMS_SCHEMA,
+    "policy_set_mode": POLICY_SET_MODE_PARAMS_SCHEMA,
 }
 
 
@@ -1372,6 +1404,22 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "name": "system_get_environment_variable",
             "description": "Read a single environment variable value (denylisted names are blocked).",
             "parameters": SYSTEM_GET_ENV_VAR_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "policy_get",
+            "description": "Get current effective security policy (safe to display).",
+            "parameters": POLICY_GET_PARAMS_SCHEMA,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "policy_set_mode",
+            "description": "Set security policy access_mode (requires explicit confirmation).",
+            "parameters": POLICY_SET_MODE_PARAMS_SCHEMA,
         },
     },
 ]

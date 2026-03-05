@@ -86,6 +86,7 @@ def build_default_registry() -> ToolRegistry:
     )
     from rag.tools.web_fetch import fetch_url
     from rag.tools.web_search import search_web
+    from rag.security.policy import policy_get, policy_set_mode
 
     return ToolRegistry(
         tools={
@@ -150,5 +151,8 @@ def build_default_registry() -> ToolRegistry:
             "system_get_user_info": system_get_user_info,
             "system_get_paths": system_get_paths,
             "system_get_environment_variable": system_get_environment_variable,
+            # Security policy tools
+            "policy_get": policy_get,
+            "policy_set_mode": policy_set_mode,
         }
     )

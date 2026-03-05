@@ -409,8 +409,19 @@ def _iter_files_rglob(
     return results, truncated, reason
 
 
-def _drive_folder_id(folder_name: str, parent_folder_id: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]], Optional[str]]:
-    res = drive_ensure_folder({"folder_name": folder_name, "parent_folder_id": parent_folder_id} if parent_folder_id else {"folder_name": folder_name})
+def _drive_folder_id(
+    folder_name: str,
+    parent_folder_id: Optional[str] = None,
+    *,
+    user_confirmation: Optional[bool] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+    payload: Dict[str, Any] = {"folder_name": folder_name}
+    if parent_folder_id:
+        payload["parent_folder_id"] = parent_folder_id
+    if user_confirmation is True:
+        payload["user_confirmation"] = True
+
+    res = drive_ensure_folder(payload)
     if not res.get("ok"):
         return None, res.get("data"), res.get("error") or "drive_ensure_folder failed"
     folder_id = _safe_str((res.get("data") or {}).get("folder_id")).strip()
@@ -561,7 +572,11 @@ def app_upload_files_to_drive(args: Dict[str, Any]) -> Dict[str, Any]:
             "error": None,
         }
 
-    folder_id, ensure_data, derr = _drive_folder_id(drive_folder_name.strip(), args.get("parent_folder_id"))
+    folder_id, ensure_data, derr = _drive_folder_id(
+        drive_folder_name.strip(),
+        args.get("parent_folder_id"),
+        user_confirmation=True if user_confirmation is True else None,
+    )
     if derr:
         return {"ok": False, "data": {"step": "drive_ensure_folder", "details": ensure_data}, "error": derr}
 
@@ -622,6 +637,7 @@ def app_upload_files_to_drive(args: Dict[str, Any]) -> Dict[str, Any]:
                 "folder_id": folder_id,
                 "filename": Path(local_path).name,
                 "mime_type": _guess_mime(Path(local_path)),
+                "user_confirmation": True if user_confirmation is True else None,
             }
         )
         if not up_res.get("ok"):
@@ -709,7 +725,11 @@ def app_sync_local_folder_to_drive(args: Dict[str, Any]) -> Dict[str, Any]:
     if root_path is None or not root_path.exists() or not root_path.is_dir():
         return {"ok": False, "data": None, "error": "local_folder does not exist or is not a directory"}
 
-    folder_id, ensure_data, derr = _drive_folder_id(drive_folder_name.strip(), args.get("parent_folder_id"))
+    folder_id, ensure_data, derr = _drive_folder_id(
+        drive_folder_name.strip(),
+        args.get("parent_folder_id"),
+        user_confirmation=True if user_confirmation is True else None,
+    )
     if derr:
         return {"ok": False, "data": {"step": "drive_ensure_folder", "details": ensure_data}, "error": derr}
     assert folder_id is not None
@@ -773,6 +793,7 @@ def app_sync_local_folder_to_drive(args: Dict[str, Any]) -> Dict[str, Any]:
                 "folder_id": folder_id,
                 "filename": Path(local_path).name,
                 "mime_type": _guess_mime(Path(local_path)),
+                "user_confirmation": True if user_confirmation is True else None,
             }
         )
         if not up_res.get("ok"):
@@ -982,7 +1003,11 @@ def app_email_pdf_pipeline(args: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return {"ok": False, "data": None, "error": err}
 
-    folder_id, ensure_data, derr = _drive_folder_id(drive_folder_name.strip(), args.get("parent_folder_id"))
+    folder_id, ensure_data, derr = _drive_folder_id(
+        drive_folder_name.strip(),
+        args.get("parent_folder_id"),
+        user_confirmation=True if user_confirmation is True else None,
+    )
     if derr:
         return {"ok": False, "data": {"step": "drive_ensure_folder", "details": ensure_data}, "error": derr}
     assert folder_id is not None
@@ -1081,7 +1106,13 @@ def app_email_pdf_pipeline(args: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         if isinstance(label_name, str) and label_name.strip() and not dry_run:
-            _ = gmail_apply_label({"message_id": mid, "label_name": label_name.strip()})
+            _ = gmail_apply_label(
+                {
+                    "message_id": mid,
+                    "label_name": label_name.strip(),
+                    "user_confirmation": True if user_confirmation is True else None,
+                }
+            )
 
     logger.info("app_email_pdf_pipeline: uploaded=%s dup=%s errors=%s", uploaded, duplicates, len(errors))
 
@@ -1365,7 +1396,11 @@ def app_auto_backup_folder(args: Dict[str, Any]) -> Dict[str, Any]:
 
     upload_info: Optional[Dict[str, Any]] = None
     if isinstance(drive_folder_name, str) and drive_folder_name.strip():
-        folder_id, ensure_data, derr = _drive_folder_id(drive_folder_name.strip(), args.get("parent_folder_id"))
+        folder_id, ensure_data, derr = _drive_folder_id(
+            drive_folder_name.strip(),
+            args.get("parent_folder_id"),
+            user_confirmation=True if user_confirmation is True else None,
+        )
         if derr:
             return {"ok": False, "data": {"step": "drive_ensure_folder", "details": ensure_data}, "error": derr}
         assert folder_id is not None
@@ -1376,7 +1411,13 @@ def app_auto_backup_folder(args: Dict[str, Any]) -> Dict[str, Any]:
 
         if _sha256_seen(folder_id, sha) is None:
             up_res = drive_upload_local_file(
-                {"local_path": str(zip_path), "folder_id": folder_id, "filename": zip_path.name, "mime_type": "application/zip"}
+                {
+                    "local_path": str(zip_path),
+                    "folder_id": folder_id,
+                    "filename": zip_path.name,
+                    "mime_type": "application/zip",
+                    "user_confirmation": True if user_confirmation is True else None,
+                }
             )
             if not up_res.get("ok"):
                 return {"ok": False, "data": {"backup_zip": str(zip_path)}, "error": up_res.get("error")}

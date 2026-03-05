@@ -713,6 +713,42 @@ def tools() -> dict:
     return {"ok": True, "tools": names}
 
 
+@app.get("/policy")
+def policy_get() -> dict:
+    from rag.security.policy import get_policy
+
+    p = get_policy(refresh=True)
+    return {"ok": True, "policy": p.safe_dict()}
+
+
+@app.post("/policy/mode")
+async def policy_set_mode(request: Request) -> dict:
+    from rag.security.policy import set_policy_mode
+
+    payload = await _read_json(request)
+    mode = payload.get("mode")
+    user_confirmation = payload.get("user_confirmation")
+
+    if mode not in {"safe", "full_disk"}:
+        raise HTTPException(status_code=400, detail="Invalid mode (safe|full_disk)")
+    if user_confirmation is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation required: set user_confirmation=true",
+        )
+
+    p = set_policy_mode(mode)  # type: ignore[arg-type]
+    return {"ok": True, "policy": p.safe_dict()}
+
+
+@app.get("/audit/recent")
+def audit_recent(limit: int = 100) -> dict:
+    from rag.state.audit_log import read_recent
+
+    entries = read_recent(limit=limit)
+    return {"ok": True, "entries": entries}
+
+
 @app.get("/oauth/google/status")
 def google_oauth_status() -> dict:
     from rag.integrations.google_oauth import is_connected

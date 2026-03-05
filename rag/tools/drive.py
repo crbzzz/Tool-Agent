@@ -12,10 +12,42 @@ import mimetypes
 from typing import Any, Dict, List
 
 from rag.integrations.google_oauth import drive_service, load_credentials
+from rag.security.guard import SecurityError, SecurityGuard
+from rag.state.audit_log import append_audit
 from rag.tools.fs import check_path_allowed
 
 
 logger = logging.getLogger(__name__)
+
+
+def _audit(action: str, status: str, *, error: str | None = None, extra: Dict[str, Any] | None = None) -> None:
+    try:
+        append_audit(action=action, status=status, error=error, extra=extra)
+    except Exception:
+        return
+
+
+def _confirm_and_batch(
+    action: str,
+    args: Dict[str, Any],
+    *,
+    file_count: int = 0,
+    total_bytes: int = 0,
+) -> tuple[SecurityGuard, None | str]:
+    g = SecurityGuard.from_env()
+    user_confirmation = args.get("user_confirmation")
+    try:
+        g.require_confirmation(action, user_confirmation if isinstance(user_confirmation, bool) else None)
+    except SecurityError as exc:
+        return g, str(exc)
+
+    try:
+        g.check_batch(action, file_count=int(file_count), total_bytes=int(total_bytes))
+        return g, None
+    except SecurityError as exc:
+        if exc.requires_confirmation and user_confirmation is True:
+            return g, None
+        return g, str(exc)
 
 
 def list_drive_files(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -93,7 +125,13 @@ def drive_ensure_folder(args: Dict[str, Any]) -> Dict[str, Any]:
         if files:
             fid = str(files[0].get("id") or "")
             if fid:
+                _audit("drive_ensure_folder", "ok", extra={"created": False, "folder_id": fid})
                 return {"ok": True, "data": {"folder_id": fid, "created": False}}
+
+        _g, confirm_err = _confirm_and_batch("drive_ensure_folder:create", args, file_count=1, total_bytes=0)
+        if confirm_err:
+            _audit("drive_ensure_folder", "denied", error=confirm_err, extra={"would_create": True})
+            return {"ok": False, "data": None, "error": confirm_err}
 
         body: Dict[str, Any] = {"name": folder_name.strip(), "mimeType": "application/vnd.google-apps.folder"}
         if isinstance(parent_folder_id, str) and parent_folder_id.strip():
@@ -103,9 +141,11 @@ def drive_ensure_folder(args: Dict[str, Any]) -> Dict[str, Any]:
         fid = str(created.get("id") or "")
         if not fid:
             return {"ok": False, "data": None, "error": "Drive folder creation returned no id"}
+        _audit("drive_ensure_folder", "ok", extra={"created": True, "folder_id": fid})
         return {"ok": True, "data": {"folder_id": fid, "created": True}}
     except Exception as exc:
         logger.warning("drive_ensure_folder failed: %s", exc)
+        _audit("drive_ensure_folder", "error", error=str(exc))
         return {"ok": False, "data": None, "error": f"Drive not available: {exc}"}
 
 
@@ -129,6 +169,16 @@ def drive_upload_file(args: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         return {"ok": False, "data": None, "error": "Invalid base64 in `content_base64`"}
 
+    _g, confirm_err = _confirm_and_batch("drive_upload_file", args, file_count=1, total_bytes=len(blob))
+    if confirm_err:
+        _audit(
+            "drive_upload_file",
+            "denied",
+            error=confirm_err,
+            extra={"folder_id": folder_id, "filename": filename, "size_bytes": len(blob)},
+        )
+        return {"ok": False, "data": None, "error": confirm_err}
+
     # Safety limit: keep uploads bounded.
     if len(blob) > 30_000_000:
         return {
@@ -150,9 +200,21 @@ def drive_upload_file(args: Dict[str, Any]) -> Dict[str, Any]:
 
         media = MediaIoBaseUpload(io.BytesIO(blob), mimetype=mime_type.strip(), resumable=False)
         created = svc.files().create(body=body, media_body=media, fields="id,name,mimeType,size,webViewLink").execute()
+        _audit(
+            "drive_upload_file",
+            "ok",
+            extra={
+                "folder_id": folder_id.strip(),
+                "filename": filename.strip(),
+                "mime_type": mime_type.strip(),
+                "size_bytes": len(blob),
+                "drive_file_id": created.get("id"),
+            },
+        )
         return {"ok": True, "data": {"file": created}}
     except Exception as exc:
         logger.warning("drive_upload_file failed: %s", exc)
+        _audit("drive_upload_file", "error", error=str(exc), extra={"folder_id": folder_id, "filename": filename})
         return {"ok": False, "data": None, "error": f"Drive not available: {exc}"}
 
 
@@ -211,6 +273,11 @@ def drive_create_folder(args: Dict[str, Any]) -> Dict[str, Any]:
     if parent_folder_id is not None and (not isinstance(parent_folder_id, str) or not parent_folder_id.strip()):
         return {"ok": False, "data": None, "error": "Invalid `parent_folder_id`"}
 
+    _g, confirm_err = _confirm_and_batch("drive_create_folder", args, file_count=1, total_bytes=0)
+    if confirm_err:
+        _audit("drive_create_folder", "denied", error=confirm_err, extra={"folder_name": folder_name, "parent_folder_id": parent_folder_id})
+        return {"ok": False, "data": None, "error": confirm_err}
+
     try:
         creds = load_credentials()
         svc = drive_service(creds)
@@ -223,9 +290,11 @@ def drive_create_folder(args: Dict[str, Any]) -> Dict[str, Any]:
         fid = str(created.get("id") or "")
         if not fid:
             return {"ok": False, "data": None, "error": "Drive folder creation returned no id"}
+        _audit("drive_create_folder", "ok", extra={"folder_id": fid, "folder_name": folder_name.strip()})
         return {"ok": True, "data": {"folder": created}}
     except Exception as exc:
         logger.warning("drive_create_folder failed: %s", exc)
+        _audit("drive_create_folder", "error", error=str(exc))
         return {"ok": False, "data": None, "error": f"Drive not available: {exc}"}
 
 
@@ -238,6 +307,11 @@ def drive_rename_folder(args: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(new_name, str) or not new_name.strip():
         return {"ok": False, "data": None, "error": "Missing or invalid `new_name`"}
 
+    _g, confirm_err = _confirm_and_batch("drive_rename_folder", args, file_count=1, total_bytes=0)
+    if confirm_err:
+        _audit("drive_rename_folder", "denied", error=confirm_err, extra={"folder_id": folder_id, "new_name": new_name})
+        return {"ok": False, "data": None, "error": confirm_err}
+
     try:
         creds = load_credentials()
         svc = drive_service(creds)
@@ -246,9 +320,11 @@ def drive_rename_folder(args: Dict[str, Any]) -> Dict[str, Any]:
             body={"name": new_name.strip()},
             fields="id,name,parents,modifiedTime",
         ).execute()
+        _audit("drive_rename_folder", "ok", extra={"folder_id": folder_id.strip(), "new_name": new_name.strip()})
         return {"ok": True, "data": {"folder": updated}}
     except Exception as exc:
         logger.warning("drive_rename_folder failed: %s", exc)
+        _audit("drive_rename_folder", "error", error=str(exc), extra={"folder_id": folder_id})
         return {"ok": False, "data": None, "error": f"Drive not available: {exc}"}
 
 
@@ -263,6 +339,16 @@ def drive_move_folder(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "data": None, "error": "Missing or invalid `new_parent_folder_id`"}
     if remove_other_parents is not None and not isinstance(remove_other_parents, bool):
         return {"ok": False, "data": None, "error": "Invalid `remove_other_parents`"}
+
+    _g, confirm_err = _confirm_and_batch("drive_move_folder", args, file_count=1, total_bytes=0)
+    if confirm_err:
+        _audit(
+            "drive_move_folder",
+            "denied",
+            error=confirm_err,
+            extra={"folder_id": folder_id, "new_parent_folder_id": new_parent_folder_id},
+        )
+        return {"ok": False, "data": None, "error": confirm_err}
 
     try:
         creds = load_credentials()
@@ -282,6 +368,11 @@ def drive_move_folder(args: Dict[str, Any]) -> Dict[str, Any]:
             removeParents=remove_parents,
             fields="id,name,parents,modifiedTime",
         ).execute()
+        _audit(
+            "drive_move_folder",
+            "ok",
+            extra={"folder_id": folder_id.strip(), "new_parent_folder_id": new_parent_folder_id.strip()},
+        )
         return {
             "ok": True,
             "data": {
@@ -291,15 +382,17 @@ def drive_move_folder(args: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as exc:
         logger.warning("drive_move_folder failed: %s", exc)
+        _audit("drive_move_folder", "error", error=str(exc), extra={"folder_id": folder_id})
         return {"ok": False, "data": None, "error": f"Drive not available: {exc}"}
 
 
 def drive_delete_folder(args: Dict[str, Any]) -> Dict[str, Any]:
     folder_id = args.get("folder_id")
-    confirmation = args.get("user_confirmation")
 
-    if confirmation is not True:
-        return {"ok": False, "data": None, "error": "Confirmation required: set user_confirmation=true"}
+    _g, confirm_err = _confirm_and_batch("drive_delete_folder", args, file_count=1, total_bytes=0)
+    if confirm_err:
+        _audit("drive_delete_folder", "denied", error=confirm_err, extra={"folder_id": folder_id})
+        return {"ok": False, "data": None, "error": confirm_err}
     if not isinstance(folder_id, str) or not folder_id.strip():
         return {"ok": False, "data": None, "error": "Missing or invalid `folder_id`"}
 
@@ -307,9 +400,11 @@ def drive_delete_folder(args: Dict[str, Any]) -> Dict[str, Any]:
         creds = load_credentials()
         svc = drive_service(creds)
         svc.files().delete(fileId=folder_id.strip()).execute()
+        _audit("drive_delete_folder", "ok", extra={"folder_id": folder_id.strip()})
         return {"ok": True, "data": {"folder_id": folder_id.strip(), "deleted": True}}
     except Exception as exc:
         logger.warning("drive_delete_folder failed: %s", exc)
+        _audit("drive_delete_folder", "error", error=str(exc), extra={"folder_id": folder_id})
         return {"ok": False, "data": None, "error": f"Drive not available: {exc}"}
 
 
@@ -333,6 +428,14 @@ def drive_upload_local_file(args: Dict[str, Any]) -> Dict[str, Any]:
     if mime_type is not None and (not isinstance(mime_type, str) or not mime_type.strip()):
         return {"ok": False, "data": None, "error": "Invalid `mime_type`"}
 
+    g = SecurityGuard.from_env()
+    user_confirmation = args.get("user_confirmation")
+    try:
+        g.require_confirmation("drive_upload_local_file", user_confirmation if isinstance(user_confirmation, bool) else None)
+    except SecurityError as exc:
+        _audit("drive_upload_local_file", "denied", error=str(exc), extra={"folder_id": folder_id, "local_path": local_path})
+        return {"ok": False, "data": None, "error": str(exc)}
+
     path, err = check_path_allowed(local_path)
     if err:
         return {"ok": False, "data": None, "error": err}
@@ -342,11 +445,19 @@ def drive_upload_local_file(args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         raw = path.read_bytes()
     except Exception as exc:
+        _audit("drive_upload_local_file", "error", error=str(exc), extra={"local_path": local_path})
         return {"ok": False, "data": None, "error": f"Read failed: {exc}"}
 
     # Safety limit (same as base64 upload tool): 30MB
     if len(raw) > 30_000_000:
         return {"ok": False, "data": None, "error": "File too large (>30MB)"}
+
+    try:
+        g.check_batch("drive_upload_local_file", file_count=1, total_bytes=len(raw))
+    except SecurityError as exc:
+        if not (exc.requires_confirmation and user_confirmation is True):
+            _audit("drive_upload_local_file", "denied", error=str(exc), extra={"local_path": local_path, "size_bytes": len(raw)})
+            return {"ok": False, "data": None, "error": str(exc)}
 
     guessed_mime, _ = mimetypes.guess_type(str(path))
     resolved_mime = (mime_type.strip() if isinstance(mime_type, str) and mime_type.strip() else guessed_mime) or "application/octet-stream"
@@ -364,6 +475,19 @@ def drive_upload_local_file(args: Dict[str, Any]) -> Dict[str, Any]:
         fid = str(created.get("id") or "")
         if not fid:
             return {"ok": False, "data": None, "error": "Drive upload returned no id"}
+
+        _audit(
+            "drive_upload_local_file",
+            "ok",
+            extra={
+                "folder_id": folder_id.strip(),
+                "local_path": str(path),
+                "filename": resolved_name,
+                "mime_type": resolved_mime,
+                "size_bytes": len(raw),
+                "drive_file_id": fid,
+            },
+        )
         return {
             "ok": True,
             "data": {
@@ -377,4 +501,5 @@ def drive_upload_local_file(args: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as exc:
         logger.warning("drive_upload_local_file failed: %s", exc)
+        _audit("drive_upload_local_file", "error", error=str(exc), extra={"local_path": local_path, "folder_id": folder_id})
         return {"ok": False, "data": None, "error": f"Drive not available: {exc}"}

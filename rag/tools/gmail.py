@@ -10,9 +10,18 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from rag.integrations.google_oauth import gmail_service, load_credentials
+from rag.security.guard import SecurityError, SecurityGuard
+from rag.state.audit_log import append_audit
 
 
 logger = logging.getLogger(__name__)
+
+
+def _audit(action: str, status: str, *, error: str | None = None, extra: Dict[str, Any] | None = None) -> None:
+    try:
+        append_audit(action=action, status=status, error=error, extra=extra)
+    except Exception:
+        return
 
 
 def _header(headers: List[Dict[str, Any]], name: str) -> Optional[str]:
@@ -287,11 +296,19 @@ def gmail_download_attachment(args: Dict[str, Any]) -> Dict[str, Any]:
 def gmail_apply_label(args: Dict[str, Any]) -> Dict[str, Any]:
     message_id = args.get("message_id")
     label_name = args.get("label_name")
+    user_confirmation = args.get("user_confirmation")
 
     if not isinstance(message_id, str) or not message_id.strip():
         return {"ok": False, "data": None, "error": "Missing or invalid `message_id`"}
     if not isinstance(label_name, str) or not label_name.strip():
         return {"ok": False, "data": None, "error": "Missing or invalid `label_name`"}
+
+    g = SecurityGuard.from_env()
+    try:
+        g.require_confirmation("gmail_apply_label", user_confirmation if isinstance(user_confirmation, bool) else None)
+    except SecurityError as exc:
+        _audit("gmail_apply_label", "denied", error=str(exc), extra={"message_id": message_id, "label_name": label_name})
+        return {"ok": False, "data": None, "error": str(exc)}
 
     try:
         creds = load_credentials()
@@ -330,26 +347,39 @@ def gmail_apply_label(args: Dict[str, Any]) -> Dict[str, Any]:
             body={"addLabelIds": [label_id], "removeLabelIds": []},
         ).execute()
 
+        _audit(
+            "gmail_apply_label",
+            "ok",
+            extra={"message_id": str(message_id), "label_name": label_name.strip(), "label_id": label_id},
+        )
+
         return {"ok": True, "data": {"message_id": str(message_id), "label_name": label_name.strip(), "label_id": label_id}}
     except Exception as exc:
         logger.warning("gmail_apply_label failed: %s", exc)
+        _audit("gmail_apply_label", "error", error=str(exc), extra={"message_id": message_id, "label_name": label_name})
         return {"ok": False, "data": None, "error": f"Gmail not available: {exc}"}
 
 
 def gmail_trash_message(args: Dict[str, Any]) -> Dict[str, Any]:
     message_id = args.get("message_id")
-    confirmation = args.get("user_confirmation")
-
-    if confirmation is not True:
-        return {"ok": False, "data": None, "error": "Confirmation required: set user_confirmation=true"}
+    user_confirmation = args.get("user_confirmation")
     if not isinstance(message_id, str) or not message_id.strip():
         return {"ok": False, "data": None, "error": "Missing or invalid `message_id`"}
+
+    g = SecurityGuard.from_env()
+    try:
+        g.require_confirmation("gmail_trash_message", user_confirmation if isinstance(user_confirmation, bool) else None)
+    except SecurityError as exc:
+        _audit("gmail_trash_message", "denied", error=str(exc), extra={"message_id": message_id})
+        return {"ok": False, "data": None, "error": str(exc)}
 
     try:
         creds = load_credentials()
         svc = gmail_service(creds)
         svc.users().messages().trash(userId="me", id=str(message_id)).execute()
+        _audit("gmail_trash_message", "ok", extra={"message_id": str(message_id)})
         return {"ok": True, "data": {"message_id": str(message_id), "trashed": True}}
     except Exception as exc:
         logger.warning("gmail_trash_message failed: %s", exc)
+        _audit("gmail_trash_message", "error", error=str(exc), extra={"message_id": message_id})
         return {"ok": False, "data": None, "error": f"Gmail not available: {exc}"}

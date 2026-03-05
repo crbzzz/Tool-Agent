@@ -10,9 +10,18 @@ from pathlib import Path
 from typing import Any, Dict
 
 from rag.integrations.google_oauth import gmail_service, load_credentials
+from rag.security.guard import SecurityError, SecurityGuard
+from rag.state.audit_log import append_audit
 
 
 logger = logging.getLogger(__name__)
+
+
+def _audit(action: str, status: str, *, error: str | None = None, extra: Dict[str, Any] | None = None) -> None:
+    try:
+        append_audit(action=action, status=status, error=error, extra=extra)
+    except Exception:
+        return
 
 
 def _uploads_dir() -> Path:
@@ -35,7 +44,7 @@ def _resolve_attachment(file_id: str) -> Path:
     return p
 
 
-def _send_email_impl(args: Dict[str, Any]) -> Dict[str, Any]:
+def _send_email_impl(args: Dict[str, Any], *, action: str) -> Dict[str, Any]:
     to = args.get("to")
     subject = args.get("subject")
     body = args.get("body")
@@ -48,12 +57,13 @@ def _send_email_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "data": None, "error": "Invalid `subject`"}
     if not isinstance(body, str):
         return {"ok": False, "data": None, "error": "Invalid `body`"}
-    if user_confirmation is not True:
-        return {
-            "ok": False,
-            "data": None,
-            "error": "Refusing to send_email without explicit user_confirmation=true.",
-        }
+
+    g = SecurityGuard.from_env()
+    try:
+        g.require_confirmation(action, user_confirmation if isinstance(user_confirmation, bool) else None)
+    except SecurityError as exc:
+        _audit(action, "denied", error=str(exc), extra={"attachments": len(attachment_file_ids or [])})
+        return {"ok": False, "data": None, "error": str(exc)}
 
     if attachment_file_ids is not None:
         if not isinstance(attachment_file_ids, list) or not all(
@@ -76,7 +86,9 @@ def _send_email_impl(args: Dict[str, Any]) -> Dict[str, Any]:
 
         # Attach files from rag/data/uploads by file_id.
         total_bytes = 0
+        file_count = 1
         if isinstance(attachment_file_ids, list) and attachment_file_ids:
+            file_count += len(attachment_file_ids)
             for fid in attachment_file_ids:
                 p = _resolve_attachment(fid)
                 data = p.read_bytes()
@@ -95,16 +107,26 @@ def _send_email_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                     maintype, subtype = "application", "octet-stream"
                 msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=p.name.split("_", 1)[-1])
 
+        try:
+            # Use the same confirmation to authorize a high-risk batch.
+            g.check_batch(action, file_count=file_count, total_bytes=total_bytes)
+        except SecurityError as exc:
+            if not (exc.requires_confirmation and user_confirmation is True):
+                _audit(action, "denied", error=str(exc), extra={"file_count": file_count, "total_bytes": total_bytes})
+                return {"ok": False, "data": None, "error": str(exc)}
+
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
         sent = svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        _audit(action, "ok", extra={"attachments": len(attachment_file_ids or []), "total_bytes": total_bytes})
         return {"ok": True, "data": {"id": sent.get("id"), "threadId": sent.get("threadId")}}
     except Exception as exc:
         logger.warning("send_email failed: %s", exc)
+        _audit(action, "error", error=str(exc), extra={"attachments": len(attachment_file_ids or [])})
         return {"ok": False, "data": None, "error": f"send_email failed: {exc}"}
 
 
 def send_email(args: Dict[str, Any]) -> Dict[str, Any]:
-    return _send_email_impl(args)
+    return _send_email_impl(args, action="send_email")
 
 
 def send_email_with_attachments(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -116,5 +138,5 @@ def send_email_with_attachments(args: Dict[str, Any]) -> Dict[str, Any]:
             "data": None,
             "error": "attachment_file_ids must be a non-empty array",
         }
-    return _send_email_impl(args)
+    return _send_email_impl(args, action="send_email_with_attachments")
 
