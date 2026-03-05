@@ -16,9 +16,12 @@ import fnmatch
 import logging
 import os
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from rag.tools.system import system_get_paths
 
 
 logger = logging.getLogger(__name__)
@@ -134,6 +137,70 @@ def check_path_allowed(path_str: Any) -> Tuple[Optional[Path], Optional[str]]:
     return path, None
 
 
+def _default_search_root_candidates() -> List[str]:
+    """Root candidates for "search everywhere".
+
+    Note: candidates are still validated by check_path_allowed.
+    We intentionally prioritize common user folders for speed/safety.
+    """
+
+    candidates: List[str] = []
+
+    try:
+        res = system_get_paths({})
+        if res.get("ok"):
+            data = res.get("data") or {}
+            for key in ("desktop", "documents", "downloads"):
+                p = data.get(key)
+                if isinstance(p, str) and p.strip():
+                    candidates.append(p.strip())
+            for key in ("desktop_candidates", "documents_candidates", "downloads_candidates"):
+                arr = data.get(key)
+                if isinstance(arr, list):
+                    for p in arr:
+                        if isinstance(p, str) and p.strip():
+                            candidates.append(p.strip())
+    except Exception:
+        pass
+
+    # Include WORKSPACE_ROOT as a fallback.
+    # In ACCESS_MODE=safe it's the only allowed place anyway.
+    # In full_disk mode, avoid scanning an entire drive root (e.g. C:\) by default.
+    try:
+        mode = _env("ACCESS_MODE", "safe").strip().lower()
+        workspace_root = _env("WORKSPACE_ROOT", "./rag/data")
+        wr = _resolve_path(workspace_root)
+
+        is_drive_root = False
+        try:
+            # On Windows: Path('C:\\').anchor == 'C:\\'
+            is_drive_root = str(wr) == str(Path(wr.anchor))
+        except Exception:
+            is_drive_root = False
+
+        if mode == "safe" or not is_drive_root:
+            candidates.append(str(wr))
+    except Exception:
+        pass
+
+    # Environment fallbacks.
+    for env_name in ("USERPROFILE", "OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        v = os.getenv(env_name)
+        if isinstance(v, str) and v.strip():
+            candidates.append(v.strip())
+
+    # De-dup (case-insensitive) while preserving order.
+    uniq: List[str] = []
+    seen = set()
+    for c in candidates:
+        k = c.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(c)
+    return uniq
+
+
 def _stat_info(p: Path) -> Dict[str, Any]:
     try:
         st = p.stat()
@@ -227,6 +294,170 @@ def fs_search_files(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def fs_search_recursive(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively search for files under a root.
+
+    This is a safer alternative to Path.rglob for huge trees (e.g. C:\\), with:
+    - max_depth: limit recursion depth
+    - max_seconds: stop after a time budget
+
+    Returns quickly with truncated=true when limits are hit.
+    """
+
+    # Be tolerant to common arg aliases produced by models.
+    raw_root = args.get("root")
+    if raw_root is None:
+        raw_root = args.get("root_path")
+    if raw_root is None:
+        raw_root = args.get("search_root")
+    roots: List[Path] = []
+
+    # If no root is provided, search common user folders automatically.
+    if raw_root is None or (isinstance(raw_root, str) and not raw_root.strip()):
+        for cand in _default_search_root_candidates():
+            p, e = check_path_allowed(cand)
+            if e or p is None:
+                continue
+            try:
+                if p.exists() and p.is_dir():
+                    roots.append(p)
+            except Exception:
+                continue
+
+        if not roots:
+            return {"ok": False, "data": None, "error": "No allowed default roots to search"}
+    else:
+        root, err = check_path_allowed(raw_root)
+        if err:
+            return {"ok": False, "data": None, "error": err}
+        if root is None:
+            return {"ok": False, "data": None, "error": "Invalid path"}
+        roots = [root]
+
+    pattern = args.get("pattern", "*")
+    if not isinstance(pattern, str) or not pattern.strip():
+        return {"ok": False, "data": None, "error": "Invalid pattern"}
+
+    # Optional filters (aliases from other tools / natural model output)
+    extensions = args.get("extensions")
+    name_contains = args.get("name_contains")
+
+    ext_set: Optional[set[str]] = None
+    if extensions is not None:
+        if not isinstance(extensions, list) or not all(isinstance(x, str) and x.strip() for x in extensions):
+            return {"ok": False, "data": None, "error": "Invalid extensions"}
+        ext_set = {x.strip().lower() for x in extensions}
+
+    needle = ""
+    if name_contains is not None:
+        if not isinstance(name_contains, str):
+            return {"ok": False, "data": None, "error": "Invalid name_contains"}
+        needle = name_contains.strip().lower()
+
+    max_results = args.get("max_results", 1000)
+    if not isinstance(max_results, int) or max_results < 1 or max_results > 20000:
+        return {"ok": False, "data": None, "error": "Invalid max_results (1..20000)"}
+
+    include_dirs = bool(args.get("include_dirs", False))
+
+    max_depth = args.get("max_depth")
+    if max_depth is not None:
+        if not isinstance(max_depth, int) or max_depth < 0 or max_depth > 50:
+            return {"ok": False, "data": None, "error": "Invalid max_depth (0..50)"}
+
+    max_seconds = args.get("max_seconds", 10)
+    if max_seconds is not None:
+        if not isinstance(max_seconds, (int, float)) or max_seconds <= 0 or max_seconds > 120:
+            return {"ok": False, "data": None, "error": "Invalid max_seconds (0..120)"}
+
+    started = time.monotonic()
+    results: List[Dict[str, Any]] = []
+    truncated = False
+    truncated_reason = ""
+
+    searched_roots: List[str] = []
+
+    # Walk with pruning and graceful permission error handling.
+    try:
+        for root in roots:
+            try:
+                if not root.exists() or not root.is_dir():
+                    continue
+            except Exception:
+                continue
+            searched_roots.append(str(root))
+
+            root_str = str(root)
+            base_depth = root_str.rstrip("\\/").count(os.sep)
+
+            for dirpath, dirnames, filenames in os.walk(root_str, topdown=True, followlinks=False):
+                # Timeout check
+                if max_seconds is not None and (time.monotonic() - started) >= float(max_seconds):
+                    truncated = True
+                    truncated_reason = f"search timed out after {max_seconds} seconds"
+                    raise StopIteration
+
+                # Depth pruning
+                if max_depth is not None:
+                    cur_depth = dirpath.rstrip("\\/").count(os.sep) - base_depth
+                    if cur_depth >= int(max_depth):
+                        dirnames[:] = []
+
+                # Match directories (optional)
+                if include_dirs:
+                    for dn in list(dirnames):
+                        if fnmatch.fnmatch(dn, pattern):
+                            results.append(_stat_info(Path(dirpath) / dn))
+                            if len(results) >= max_results:
+                                truncated = True
+                                truncated_reason = f"results limited to {max_results}"
+                                raise StopIteration
+
+                # Match files
+                for fn in filenames:
+                    if not fnmatch.fnmatch(fn, pattern):
+                        continue
+
+                    if ext_set is not None:
+                        try:
+                            if Path(fn).suffix.lower() not in ext_set:
+                                continue
+                        except Exception:
+                            continue
+
+                    if needle:
+                        try:
+                            if needle not in fn.lower():
+                                continue
+                        except Exception:
+                            continue
+
+                    results.append(_stat_info(Path(dirpath) / fn))
+                    if len(results) >= max_results:
+                        truncated = True
+                        truncated_reason = f"results limited to {max_results}"
+                        raise StopIteration
+
+    except StopIteration:
+        pass
+    except Exception as exc:
+        logger.warning("fs_search_recursive failed: %s", exc)
+        return {"ok": False, "data": None, "error": f"Search failed: {exc}"}
+
+    data: Dict[str, Any] = {
+        "root": str(roots[0]) if roots else None,
+        "roots": searched_roots,
+        "pattern": pattern,
+        "extensions": sorted(list(ext_set)) if ext_set is not None else None,
+        "name_contains": needle or None,
+        "results": results,
+        "truncated": truncated,
+    }
+    if truncated_reason:
+        data["truncated_reason"] = truncated_reason
+    return {"ok": True, "data": data, "error": None}
+
+
 def fs_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
     path, err = check_path_allowed(args.get("path"))
     if err:
@@ -266,13 +497,22 @@ def fs_read_file(args: Dict[str, Any]) -> Dict[str, Any]:
 
     # binary
     b64 = base64.b64encode(raw).decode("ascii")
-    truncated = False
     if len(b64) > max_chars:
-        b64 = b64[:max_chars]
-        truncated = True
+        # Returning partial base64 often breaks downstream uploads and can cause agent loops.
+        return {
+            "ok": False,
+            "data": {
+                "path": str(path),
+                "mode": "binary",
+                "size_bytes": len(raw),
+                "would_truncate": True,
+                "max_chars": max_chars,
+            },
+            "error": "Refusing to return partial base64. Increase max_chars or use drive_upload_local_file.",
+        }
     return {
         "ok": True,
-        "data": {"path": str(path), "mode": "binary", "content_base64": b64, "truncated": truncated},
+        "data": {"path": str(path), "mode": "binary", "content_base64": b64, "size_bytes": len(raw)},
         "error": None,
     }
 

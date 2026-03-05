@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import datetime
 import os
 import uuid
 from pathlib import Path
@@ -22,11 +24,10 @@ from rag.api.deps import get_orchestrator
 from rag.api.schemas import ChatRequest, ChatResponse
 from rag.api.session_store import get_or_create_session, update_session
 
+from rag.logging_setup import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-)
+
+configure_logging()
 
 # Load local .env (if present) for all endpoints, including OAuth routes.
 load_dotenv(find_dotenv(".env"), override=False)
@@ -144,6 +145,26 @@ def _safe_title(text: str, max_len: int = 80) -> str:
     if len(t) <= max_len:
         return t
     return t[: max_len - 1].rstrip() + "…"
+
+
+def _estimate_tokens(text: str) -> int:
+    """Very rough token estimate when the model provider doesn't return usage.
+
+    Empirically, ~4 characters per token is a common approximation.
+    """
+
+    s = (text or "").strip()
+    if not s:
+        return 0
+    return int(math.ceil(len(s) / 4.0))
+
+
+def _utc_today() -> datetime.date:
+    try:
+        return datetime.datetime.now(datetime.UTC).date()
+    except Exception:
+        # Fallback for older runtimes
+        return datetime.datetime.utcnow().date()
 
 
 def _callback_url(request: Request, poll_token: str) -> str:
@@ -305,6 +326,100 @@ def chats_messages(chat_id: str, request: Request) -> dict:
         return {"ok": True, "messages": rows or []}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/usage/tokens")
+def usage_tokens(request: Request) -> dict:
+    """Return token usage for the signed-in user.
+
+    Data comes from `public.token_usage_daily` (see sql/migrations/002_token_usage_supabase.sql).
+    """
+
+    s = _require_auth_session(request)
+    quota_daily = 48000
+
+    days_raw = None
+    try:
+        days_raw = request.query_params.get("days")
+    except Exception:
+        days_raw = None
+
+    days = 30
+    try:
+        if days_raw is not None:
+            days = int(str(days_raw))
+    except Exception:
+        days = 30
+    days = max(1, min(days, 365))
+
+    today = _utc_today()
+    start = today - datetime.timedelta(days=days - 1)
+
+    rest = _supabase_rest()
+    try:
+        rows = rest.request(
+            "GET",
+            "token_usage_daily",
+            s.access_token,
+            params={
+                "select": "day,prompt_tokens,completion_tokens,total_tokens,estimated_tokens",
+                "day": f"gte.{start.isoformat()}",
+                "order": "day.asc",
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    by_day: dict[str, dict] = {}
+    for r in rows or []:
+        d = (r or {}).get("day")
+        if not isinstance(d, str) or not d:
+            continue
+        by_day[d] = {
+            "day": d,
+            "prompt_tokens": int((r or {}).get("prompt_tokens") or 0),
+            "completion_tokens": int((r or {}).get("completion_tokens") or 0),
+            "total_tokens": int((r or {}).get("total_tokens") or 0),
+            "estimated_tokens": int((r or {}).get("estimated_tokens") or 0),
+        }
+
+    series = []
+    cursor = start
+    while cursor <= today:
+        key = cursor.isoformat()
+        series.append(
+            by_day.get(
+                key,
+                {
+                    "day": key,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "estimated_tokens": 0,
+                },
+            )
+        )
+        cursor += datetime.timedelta(days=1)
+
+    today_row = by_day.get(today.isoformat(), None) or {
+        "day": today.isoformat(),
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "estimated_tokens": 0,
+    }
+
+    used_today = int(today_row.get("total_tokens") or 0)
+    remaining_today = max(0, quota_daily - used_today)
+
+    return {
+        "ok": True,
+        "quota_daily": quota_daily,
+        "day": today.isoformat(),
+        "used_today": today_row,
+        "remaining_today": remaining_today,
+        "series": series,
+    }
 
 
 @app.post("/auth/login")
@@ -768,6 +883,27 @@ def chat(req: ChatRequest, request: Request) -> ChatResponse:
                 ],
                 prefer="return=minimal",
             )
+
+            # Record token usage (best-effort). Uses an estimate unless the provider exposes real usage.
+            try:
+                prompt_tokens = _estimate_tokens(req.message)
+                completion_tokens = _estimate_tokens(result.final_answer)
+                total_tokens = prompt_tokens + completion_tokens
+                rest.request(
+                    "POST",
+                    "rpc/add_token_usage",
+                    auth_session.access_token,
+                    json_body={
+                        "p_day": _utc_today().isoformat(),
+                        "p_prompt": prompt_tokens,
+                        "p_completion": completion_tokens,
+                        "p_total": total_tokens,
+                        "p_estimated": total_tokens,
+                    },
+                    prefer="return=minimal",
+                )
+            except Exception:
+                logging.exception("Failed to record token usage")
         except Exception:
             logging.exception("Failed to persist chat turn")
 
@@ -790,7 +926,7 @@ async def documents_upload(file: UploadFile = File(...)) -> dict:
     The file is stored under rag/data/uploads so it remains readable in ACCESS_MODE=safe
     with the default WORKSPACE_ROOT.
 
-    Returns: { ok: true, data: { path, original_name, size_bytes, content_type } }
+    Returns: { ok: true, data: { file_id, path, original_name, size_bytes, content_type } }
     """
 
     try:
@@ -815,6 +951,7 @@ async def documents_upload(file: UploadFile = File(...)) -> dict:
         return {
             "ok": True,
             "data": {
+                "file_id": out_name,
                 "path": str(out_path.resolve()),
                 "original_name": safe_name,
                 "size_bytes": len(data),
@@ -827,6 +964,86 @@ async def documents_upload(file: UploadFile = File(...)) -> dict:
     except Exception as exc:
         logging.exception("/documents/upload failed")
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/uploads")
+async def uploads_create(file: UploadFile = File(...)) -> dict:
+    """Upload a file for use as an email attachment.
+
+    Returns: { ok: true, data: { file_id, filename, size_bytes, mime_type, uploaded_at_iso } }
+    """
+
+    try:
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        uploads_dir = _uploads_dir()
+        safe_name = (Path(file.filename or "uploaded").name or "uploaded")
+        out_name = f"{uuid.uuid4().hex}_{safe_name}"
+        out_path = uploads_dir / out_name
+        out_path.write_bytes(data)
+
+        st = out_path.stat()
+        return {
+            "ok": True,
+            "data": {
+                "file_id": out_name,
+                "filename": safe_name,
+                "size_bytes": int(st.st_size),
+                "mime_type": file.content_type or "application/octet-stream",
+                "uploaded_at_iso": datetime.datetime.fromtimestamp(
+                    st.st_mtime, tz=datetime.timezone.utc
+                ).isoformat(),
+            },
+            "error": None,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("/uploads failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/uploads")
+async def uploads_list(limit: int = 50) -> dict:
+    """List uploaded files available as attachments."""
+
+    try:
+        if limit < 1:
+            limit = 1
+        if limit > 100:
+            limit = 100
+
+        uploads_dir = _uploads_dir()
+        rows = []
+        for p in uploads_dir.iterdir():
+            try:
+                if not p.is_file():
+                    continue
+                st = p.stat()
+                # Stored as <uuid>_<original>
+                filename = p.name.split("_", 1)[-1]
+                rows.append(
+                    {
+                        "file_id": p.name,
+                        "filename": filename,
+                        "size_bytes": int(st.st_size),
+                        "mime_type": "application/octet-stream",
+                        "uploaded_at_iso": datetime.datetime.fromtimestamp(
+                            st.st_mtime, tz=datetime.timezone.utc
+                        ).isoformat(),
+                    }
+                )
+            except Exception:
+                continue
+
+        rows.sort(key=lambda r: r.get("uploaded_at_iso") or "", reverse=True)
+        return {"ok": True, "data": {"files": rows[:limit]}, "error": None}
+    except Exception as exc:
+        logging.exception("/uploads list failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 
 @app.post("/voice/transcribe")

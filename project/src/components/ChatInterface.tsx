@@ -8,6 +8,13 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 type MessageKind = 'text' | 'file';
 
+type PendingUpload = {
+  file_id: string;
+  filename: string;
+  size_bytes?: number;
+  mime_type?: string;
+};
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -20,6 +27,7 @@ export interface Message {
 
 interface ChatInterfaceProps {
   onMenuClick: () => void;
+  onOpenApps: () => void;
   resetCounter: number;
   chatId: string | null;
   initialMessages: Message[];
@@ -36,7 +44,7 @@ interface ChatResponse {
 function extractAssistantAnswer(raw: string): string {
   const text = (raw ?? '').toString();
   const trimmed = text.trim();
-  if (!trimmed) return '';
+  if (!trimmed) return "I couldn't generate a response. Please try again.";
 
   // If the agent returns a JSON payload (e.g. {"answer":..., "sources":...}),
   // only display the human-readable `answer` field.
@@ -45,18 +53,22 @@ function extractAssistantAnswer(raw: string): string {
       const parsed = JSON.parse(trimmed) as unknown;
       if (parsed && typeof parsed === 'object') {
         const maybeAnswer = (parsed as { answer?: unknown }).answer;
-        if (typeof maybeAnswer === 'string') return maybeAnswer;
+        if (typeof maybeAnswer === 'string') {
+          const a = maybeAnswer.trim();
+          return a || "I couldn't generate a response. Please try again.";
+        }
       }
     } catch {
       // Not JSON; fall through.
     }
   }
 
-  return text;
+  return trimmed || "I couldn't generate a response. Please try again.";
 }
 
 export default function ChatInterface({
   onMenuClick,
+  onOpenApps,
   resetCounter,
   chatId,
   initialMessages,
@@ -69,6 +81,7 @@ export default function ChatInterface({
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -262,35 +275,49 @@ export default function ChatInterface({
   };
 
   const handleSend = async () => {
-    if (!input.trim()) return;
-    const current = input.trim();
-    const ok = await sendMessage(current);
+    const note = input.trim();
+
+    const attachmentsText =
+      pendingUploads.length > 0
+        ? `Attachments (file_id):\n${pendingUploads
+            .map((u) => `- ${u.file_id} (${u.filename})`)
+            .join('\n')}`
+        : '';
+
+    const content = [attachmentsText, note].filter(Boolean).join('\n\n').trim();
+    if (!content) return;
+
+    const ok = await sendMessage(content);
     if (ok) {
       setInput('');
+      setPendingUploads([]);
       onChatActivity?.();
     }
   };
 
-  const uploadDocument = async (file: File) => {
+  const uploadAttachment = async (file: File) => {
     const form = new FormData();
     form.append('file', file, file.name);
 
-    const r = await fetch('/documents/upload', { method: 'POST', body: form });
+    const r = await fetch('/uploads', { method: 'POST', body: form });
     if (!r.ok) {
       const text = await r.text();
       throw new Error(text || `HTTP ${r.status}`);
     }
     const data = (await r.json()) as {
       ok?: boolean;
-      data?: { path?: string; original_name?: string; size_bytes?: number; content_type?: string };
+      data?: { file_id?: string; filename?: string; size_bytes?: number; mime_type?: string };
       error?: string | null;
     };
-    const p = data?.data?.path;
-    if (!p) throw new Error(data?.error || 'Upload failed');
+
+    const fid = data?.data?.file_id;
+    const filename = data?.data?.filename;
+    if (!fid || !filename) throw new Error(data?.error || 'Upload failed');
+
     return data.data;
   };
 
-  const attachFileAndSend = async (file: File) => {
+  const attachFile = async (file: File) => {
     if (isLoading || isUploadingDocument) return;
 
     const authed = await isAuthenticated();
@@ -301,20 +328,25 @@ export default function ChatInterface({
 
     setIsUploadingDocument(true);
     try {
-      const uploaded = await uploadDocument(file);
-      const question = input.trim();
-      const name = uploaded.original_name || file.name || 'document';
-      const path = uploaded.path || '';
+      const uploaded = await uploadAttachment(file);
+      const file_id = uploaded?.file_id || '';
+      const filename = uploaded?.filename || file.name || 'document';
+      if (!file_id) throw new Error('Upload failed');
 
-      const msg = question
-        ? `Fichier ajouté: ${name}\nChemin: ${path}\n\nQuestion: ${question}`
-        : `Fichier ajouté: ${name}\nChemin: ${path}\n\nTâche: extrait le texte (doc_extract_any) puis fais un résumé.`;
+      setPendingUploads((prev) => {
+        if (prev.some((p) => p.file_id === file_id)) return prev;
+        return [
+          ...prev,
+          {
+            file_id,
+            filename,
+            size_bytes: uploaded?.size_bytes,
+            mime_type: uploaded?.mime_type,
+          },
+        ];
+      });
 
-      const ok = await sendMessage(msg, { kind: 'file', displayContent: '', fileName: name });
-      if (ok) {
-        setInput('');
-        onChatActivity?.();
-      }
+      showToast(`Attached: ${filename}`);
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e));
     } finally {
@@ -487,7 +519,14 @@ export default function ChatInterface({
           </div>
         </div>
 
-        <div className="flex items-center gap-2" />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onOpenApps}
+            className="px-3 py-2 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900 hover:opacity-95 transition-opacity"
+          >
+            Apps
+          </button>
+        </div>
       </header>
 
       <main
@@ -514,7 +553,7 @@ export default function ChatInterface({
           setIsDraggingFile(false);
 
           const f = e.dataTransfer.files?.[0];
-          if (f) attachFileAndSend(f);
+          if (f) attachFile(f);
         }}
       >
         {isDraggingFile && (
@@ -525,7 +564,7 @@ export default function ChatInterface({
                   Drop your file to attach
                 </div>
                 <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  The document will be uploaded and sent.
+                  The document will be uploaded and attached.
                 </div>
               </div>
             </div>
@@ -702,6 +741,29 @@ export default function ChatInterface({
 
       <footer className="bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm border-t border-slate-200 dark:border-slate-800 px-6 py-4">
         <div className="max-w-3xl mx-auto">
+          {pendingUploads.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {pendingUploads.map((u) => (
+                <div
+                  key={u.file_id}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-200"
+                  title={u.file_id}
+                >
+                  <Paperclip className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span className="max-w-[220px] truncate">{u.filename}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPendingUploads((prev) => prev.filter((p) => p.file_id !== u.file_id))}
+                    className="text-slate-500 hover:text-slate-800 dark:hover:text-slate-100 transition-colors"
+                    aria-label={`Remove ${u.filename}`}
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-3">
             <div className="flex-1 relative">
               <textarea
@@ -723,7 +785,7 @@ export default function ChatInterface({
                 const f = e.target.files?.[0];
                 // Reset so selecting the same file twice triggers change.
                 e.currentTarget.value = '';
-                if (f) attachFileAndSend(f);
+                if (f) attachFile(f);
               }}
             />
 
@@ -748,7 +810,7 @@ export default function ChatInterface({
 
             <button
               onClick={handleSend}
-              disabled={!input.trim() || isLoading || isUploadingDocument}
+              disabled={(!input.trim() && pendingUploads.length === 0) || isLoading || isUploadingDocument}
               className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 hover:from-emerald-500 hover:to-teal-600 text-white rounded-xl flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md"
             >
               <Send className="w-5 h-5" />

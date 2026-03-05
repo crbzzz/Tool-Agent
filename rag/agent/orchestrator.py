@@ -16,7 +16,9 @@ from rag.agent.mistral_client import (
     extract_assistant_message_dict,
 )
 from rag.agent.response_contract import (
+    ModelOutputParseError,
     ModelOutputValidationError,
+    extract_first_json_object,
     normalized_response_to_markdown,
     parse_final_response_from_text,
     parse_tool_calls_from_text,
@@ -26,7 +28,22 @@ from rag.agent.tool_registry import ToolRegistry, build_default_registry
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_STEPS = 3
+def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        v = int(str(raw).strip())
+    except Exception:
+        return default
+    if v < min_value:
+        return min_value
+    if v > max_value:
+        return max_value
+    return v
+
+
+MAX_TOOL_STEPS = _env_int("MAX_TOOL_STEPS", 3, min_value=1, max_value=20)
 
 # Heuristics to avoid exceeding model context limits.
 # We approximate token usage by character count and keep a safe buffer.
@@ -114,9 +131,11 @@ class AgentOrchestrator:
                     if not isinstance(name, str) or not name.strip():
                         continue
                     mm["name"] = name
-                    # tool_call_id must not be None
-                    if mm.get("tool_call_id") is None:
-                        mm.pop("tool_call_id", None)
+                    # tool_call_id is required for tool-calling APIs.
+                    tci = mm.get("tool_call_id")
+                    if not isinstance(tci, str) or not tci.strip():
+                        continue
+                    mm["tool_call_id"] = tci
 
                 cleaned.append(mm)
 
@@ -240,10 +259,54 @@ class AgentOrchestrator:
             except ModelOutputValidationError:
                 return content
 
+        def _non_empty_answer(candidate: str) -> str:
+            text = (candidate or "").strip()
+            if text:
+                return text
+            # Best-effort hint from tools
+            last_err = None
+            for t in reversed(tool_trace):
+                err = t.get("error")
+                if err:
+                    last_err = str(err)
+                    break
+            if last_err:
+                return f"I couldn't complete the request. Last tool error: {last_err}"
+            return "I couldn't generate a response. Please try again."
+
         def _run_tools(tool_calls: Any) -> None:
             for call in tool_calls:
                 name = call.name
                 arguments = call.arguments if isinstance(call.arguments, dict) else {"_raw": call.arguments}
+
+                # Robust argument normalization:
+                # - If arguments arrive as a raw string, attempt to parse JSON.
+                # - If arguments contain nested {"_raw": ...} values, unwrap them.
+                if isinstance(arguments, dict):
+                    # Unwrap nested {"_raw": ...} for common fields like path/root.
+                    for k, v in list(arguments.items()):
+                        if isinstance(v, dict) and set(v.keys()) == {"_raw"}:
+                            arguments[k] = v.get("_raw")
+
+                    # If the whole args payload is a single _raw string, parse it.
+                    if set(arguments.keys()) == {"_raw"} and isinstance(arguments.get("_raw"), str):
+                        raw = (arguments.get("_raw") or "").strip()
+                        if raw:
+                            parsed: Optional[Dict[str, Any]] = None
+                            try:
+                                obj = json.loads(raw)
+                                if isinstance(obj, dict):
+                                    parsed = obj
+                            except Exception:
+                                try:
+                                    obj = extract_first_json_object(raw)
+                                    if isinstance(obj, dict):
+                                        parsed = obj
+                                except ModelOutputParseError:
+                                    parsed = None
+
+                            if parsed is not None:
+                                arguments = parsed
                 logger.info("Tool call: %s args=%s", name, arguments)
                 start = time.perf_counter()
                 try:
@@ -298,7 +361,8 @@ class AgentOrchestrator:
             if not tool_calls:
                 # Preserve assistant response in the session history.
                 messages.append(assistant_msg)
-                return OrchestratorResult(final_answer=_best_effort_final_answer(content), tool_trace=tool_trace), messages
+                rendered = _best_effort_final_answer(content)
+                return OrchestratorResult(final_answer=_non_empty_answer(rendered), tool_trace=tool_trace), messages
 
             # Important: maintain correct message order: user -> assistant -> tool -> assistant...
             # The assistant message that contained the tool_calls must be present before tool outputs.
@@ -316,7 +380,7 @@ class AgentOrchestrator:
             # Append the final assistant message for session continuity.
             rendered = _best_effort_final_answer(str(content or ""))
             messages.append({"role": "assistant", "content": str(content or "")})
-            return OrchestratorResult(final_answer=rendered or last_content or "", tool_trace=tool_trace), messages
+            return OrchestratorResult(final_answer=_non_empty_answer(rendered or last_content or ""), tool_trace=tool_trace), messages
         except Exception:
             fallback = last_content.strip() or "I couldn't complete the task within the tool step limit."
             return OrchestratorResult(final_answer=fallback, tool_trace=tool_trace), messages
